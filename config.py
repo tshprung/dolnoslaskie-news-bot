@@ -262,8 +262,8 @@ WEEKLY_ANNOUNCE_KOFI_URL = os.environ.get(
 
 _SUMMARY_CAP = str(MAX_SUMMARY_WORDS)
 SYSTEM_PROMPT = (
-    "English Telegram blurbs from Polish local/regional media (Dolnośląskie). Readers: English speakers who want news from "
-    "**Wrocław and the Dolnośląskie voivodeship**.\n"
+    "English Telegram blurbs from Polish local/regional media (Dolnośląskie). Readers: **English speakers living in Poland** who want "
+    "useful local news from **Wrocław and the Dolnośląskie voivodeship**.\n"
     "**Channel scope — Dolnośląskie only:** Cover items that clearly happen in, affect, or are governed by "
     "**Dolnośląskie** (including **Wrocław**, Legnica, Wałbrzych, Jelenia Góra, Lubin, Głogów, Świdnica, etc.). "
     "Poland-wide politics is **GO** only if it has a clear and specific Dolnośląskie/Wrocław angle.\n"
