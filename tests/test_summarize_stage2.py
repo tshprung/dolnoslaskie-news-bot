@@ -70,7 +70,11 @@ def test_fetch_blocked_403_still_summarizes_when_rss_excerpt_substantial(monkeyp
     article = {
         "link": "https://example.com/x",
         "title": "Wrocław: Police appeal for witnesses after MPK incident",
-        "summary": "Police are looking for a young man after an assault on a ticket inspector at Gajowicka tram stop. Witnesses are asked to contact police.",
+        "summary": (
+            "Police are looking for a young man after an assault on a ticket inspector at Gajowicka tram stop in Wrocław. "
+            "Witnesses are asked to contact police and provide any recordings from the area. "
+            "The incident happened after a group refused to show documents and one suspect fled, knocking the inspector to the ground."
+        ),
     }
     client = _client_with_responses("GO", "Police are seeking witnesses after an assault on an MPK ticket inspector at a Wrocław tram stop.")
     out, reason = summarize_in_english(client, MagicMock(), (1, 2), article)
