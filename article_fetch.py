@@ -177,6 +177,30 @@ def _article_body_from_dom(stripped_html: str) -> str:
     return best
 
 
+def _article_body_from_dom_wroclaw(stripped_html: str) -> str:
+    """
+    wroclaw.pl pages often have the meaningful content under <main>, while <article>
+    can be short or dominated by "follow us / Google News" boilerplate.
+    """
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return ""
+
+    soup = BeautifulSoup(stripped_html, "html.parser")
+    main = soup.find("main")
+    if main is None:
+        return ""
+
+    for tag in main.select("header, nav, footer, aside, form"):
+        tag.decompose()
+
+    text = main.get_text(separator="\n", strip=True)
+    lines = [ln.strip() for ln in text.splitlines() if len(ln.strip()) > 20]
+    out = "\n".join(lines).strip()
+    return out
+
+
 def fetch_article_body(session: requests.Session, url: str, timeout: tuple) -> str:
     paywall_signals = [
         "zaloguj się",
@@ -210,7 +234,7 @@ def fetch_article_body(session: requests.Session, url: str, timeout: tuple) -> s
                 "Chrome/124.0.0.0 Safari/537.36"
             ),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "pt-PT,pt;q=0.9,en;q=0.8",
+            "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
         }
         resp = session.get(url, timeout=timeout, headers=headers)
         resp.raise_for_status()
@@ -232,7 +256,11 @@ def fetch_article_body(session: requests.Session, url: str, timeout: tuple) -> s
             r"<style\b[^>]*>.*?</style>", " ", stripped, flags=re.DOTALL | re.IGNORECASE
         )
 
-        text = _article_body_from_dom(stripped)
+        text = ""
+        if "wroclaw.pl/" in url:
+            text = _article_body_from_dom_wroclaw(stripped)
+        if len(text) < 250:
+            text = _article_body_from_dom(stripped)
         if len(text) >= 250:
             if any(s in text.lower() for s in paywall_signals) and len(text) < 500:
                 log.warning(f"Paywall detected at {url}, ignoring fetched content")
