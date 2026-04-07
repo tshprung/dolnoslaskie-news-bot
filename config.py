@@ -9,6 +9,9 @@ FEEDS = [
     "https://www.wroclaw.pl/dla-mieszkanca/rss",
     "https://www.wroclaw.pl/komunikacja/rss",
     "https://www.wroclaw.pl/urzad/rss",
+    # Regional news outlets (RSS confirmed)
+    "https://www.radiowroclaw.pl/articles/rss",
+    "https://tuwroclaw.com/rss",
     # Lower Silesia (Dolnośląskie) regional admin/government beat
     "https://portalsamorzadowy.pl/rss/dolnoslaskie.xml",
 ]
