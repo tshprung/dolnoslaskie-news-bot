@@ -1,14 +1,14 @@
 from summarize import (
-    _hebrew_mentions_major_israeli_city,
+    _mentions_major_israeli_city,
     _source_suggests_germany_domestic_not_israel,
 )
 
 
-def test_berlin_source_flags_tel_aviv_hebrew():
+def test_berlin_source_flags_tel_aviv_text():
     de = "Demonstration am Brandenburger Tor in Berlin"
-    he = "על פסל בתל אביב נידונו לעבודות שירות"
+    he = "Discussion in Tel Aviv about a local case."
     assert _source_suggests_germany_domestic_not_israel(de) is True
-    assert _hebrew_mentions_major_israeli_city(he) is True
+    assert _mentions_major_israeli_city(he) is True
 
 
 def test_israel_story_in_german_not_flagged_as_germany_domestic_only():

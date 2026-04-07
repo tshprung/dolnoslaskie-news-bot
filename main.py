@@ -19,7 +19,7 @@ from config import (
 from database import get_new_articles, init_db, record_seen_url
 from dedup import deduplicate, record_sent_snapshot
 from http_util import make_http_session, request_timeout
-from summarize import openai_client, summarize_in_hebrew
+from summarize import openai_client, summarize_in_english
 from telegram_bot import notify_admin, send_to_telegram, telegram_html_anchor
 
 logging.basicConfig(
@@ -68,8 +68,8 @@ def main():
                 log.info(f"Skipped ({sponsored_skip_reason()}): {article['title'][:70]}")
                 _mark_article_done(conn, article)
                 continue
-            hebrew, skip_reason = summarize_in_hebrew(client, session, to, article)
-            if hebrew is None:
+            summary, skip_reason = summarize_in_english(client, session, to, article)
+            if summary is None:
                 if skip_reason:
                     log.info(f"Skipped ({skip_reason}): {article['title'][:70]}")
                     if not skip_admin_notify_for_article(article, skip_reason):
@@ -78,7 +78,7 @@ def main():
                     log.info(f"Skipped (classifier: SKIP): {article['title'][:70]}")
                 _mark_article_done(conn, article)
                 continue
-            body = html.escape(hebrew, quote=False)
+            body = html.escape(summary, quote=False)
             footer_label = f"{article['source']} | {article['date']}"
             message = f"{body}\n\n{telegram_html_anchor(article['link'], footer_label)}"
             # Mark seen BEFORE sending so a crash after Telegram POST

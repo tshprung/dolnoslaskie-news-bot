@@ -57,7 +57,7 @@ Example (every 5 minutes; offset from Polish bot if you like):
 */5 * * * * /opt/dolnoslaskie_news/run.sh
 ```
 
-**Weekly community message** (Hebrew intro + support link): `run_weekly_announce.sh` posts **once per ISO week** when the script runs in the configured window (default **Sunday 18:00** `Europe/Warsaw`). Use a **second** cron line with `CRON_TZ` so the hour matches Warsaw even if the server is UTC:
+**Weekly community message** (English intro + support link): `run_weekly_announce.sh` posts **once per ISO week** when the script runs in the configured window (default **Sunday 18:00** `Europe/Warsaw`). Use a **second** cron line with `CRON_TZ` so the hour matches Warsaw even if the server is UTC:
 
 ```cron
 CRON_TZ=Europe/Warsaw

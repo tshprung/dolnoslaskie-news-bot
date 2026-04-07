@@ -8,7 +8,7 @@ from config import (
     skip_admin_notify_for_article,
     zeit_archive_skip_reason,
 )
-from summarize import summarize_in_hebrew
+from summarize import summarize_in_english
 
 
 def test_zeit_print_issue_url_matches():
@@ -31,7 +31,7 @@ def test_zeit_skips_before_fetch_and_openai(monkeypatch):
         "summary": "Lead",
     }
     client = MagicMock()
-    out, reason = summarize_in_hebrew(client, MagicMock(), (1, 2), article)
+    out, reason = summarize_in_english(client, MagicMock(), (1, 2), article)
     assert out is None
     assert reason == zeit_archive_skip_reason()
     assert reason.lower().startswith("rss teaser:")

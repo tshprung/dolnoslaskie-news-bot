@@ -117,8 +117,8 @@ def _source_suggests_germany_domestic_not_israel(german_blob: str) -> bool:
     return True
 
 
-def _hebrew_mentions_major_israeli_city(hebrew: str) -> bool:
-    return bool(re.search(r"תל\s*[-]?\s*אביב|ירושלים", hebrew))
+def _mentions_major_israeli_city(text: str) -> bool:
+    return bool(re.search(r"(?is)\btel\s*[-]?\s*aviv\b|\bjerusalem\b", text))
 
 
 def classify(client: OpenAI, text: str):
@@ -132,7 +132,7 @@ def classify(client: OpenAI, text: str):
         ],
     )
     result = response.choices[0].message.content.strip().upper()
-    if result.startswith("SKIP") or "סקיפ" in result:
+    if result.startswith("SKIP"):
         return "SKIP"
     return "GO"
 
@@ -147,7 +147,7 @@ def _rss_excerpt_substantial(article: dict) -> bool:
     return len(summary) >= 120 and len(title) + len(summary) >= 220
 
 
-def summarize_in_hebrew(
+def summarize_in_english(
     client: OpenAI,
     session: requests.Session,
     http_timeout: tuple,
@@ -236,7 +236,7 @@ def summarize_in_hebrew(
             return None, "response truncated"
         result = (response.choices[0].message.content or "").strip()
 
-        if result.upper().startswith("SKIP") or result.startswith("סקיפ"):
+        if result.upper().startswith("SKIP"):
             return None, None
 
         is_insuf = result.upper().startswith("INSUF")

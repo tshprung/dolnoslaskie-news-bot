@@ -1,4 +1,4 @@
-"""Low-salience tabloid discrimination-lawsuit filler — skip before Hebrew."""
+"""Low-salience tabloid discrimination-lawsuit filler — skip before summarization."""
 
 from unittest.mock import MagicMock
 
@@ -7,7 +7,7 @@ from config import (
     should_skip_discrimination_klagen_filler,
     skip_admin_notify_for_reason,
 )
-from summarize import summarize_in_hebrew
+from summarize import summarize_in_english
 
 
 def test_bild_slug_diskriminierungs_klagen_miese_geschaeft():
@@ -30,7 +30,7 @@ def test_summarize_short_circuits_on_slug_without_openai(monkeypatch):
         "summary": "",
     }
     client = MagicMock()
-    out, reason = summarize_in_hebrew(client, MagicMock(), (1, 2), article)
+    out, reason = summarize_in_english(client, MagicMock(), (1, 2), article)
     assert out is None
     assert reason == discrimination_klagen_filler_skip_reason()
     client.chat.completions.create.assert_not_called()
