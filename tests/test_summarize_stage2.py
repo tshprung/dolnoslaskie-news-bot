@@ -98,6 +98,27 @@ def test_stage2_latin_only_then_english_ok(monkeypatch):
     assert client.chat.completions.create.call_count == 2
 
 
+def test_stage2_wordcount_label_echo_retries(monkeypatch):
+    body = (
+        "Wrocław police announced temporary traffic changes on Legnicka Street during sewer repairs."
+    )
+    monkeypatch.setattr("summarize.fetch_article_body", lambda *_a, **_k: (body, None))
+    article = {
+        "link": "https://www.example.com/wro-traffic",
+        "title": "Legnicka",
+        "summary": "",
+    }
+    client = _client_with_responses(
+        "GO",
+        "English (≤50 words)",
+        "Police outlined temporary traffic changes on Legnicka Street in Wrocław during repairs.",
+    )
+    out, reason = summarize_in_english(client, MagicMock(), (1, 2), article)
+    assert reason is None
+    assert out and ("wrocław" in out.lower() or "legnicka" in out.lower())
+    assert client.chat.completions.create.call_count == 3
+
+
 def test_berlin_geo_mismatch(monkeypatch):
     body = (
         "Großbrand am Brandenburger Tor in Berlin; Feuerwehr im Einsatz. "

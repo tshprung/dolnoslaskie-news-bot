@@ -77,6 +77,15 @@ _LEADING_LABEL_PATTERNS = (
     r"^english\s*-\s*",
     r"^summary\s*:\s*",
     r"^summary\s*-\s*",
+    # Echo of old prompt line "English (≤50 words)".
+    r"^english\s*\([^)]*words?\s*\)\s*:?\s*",
+)
+
+_STAGE2_ANTI_ECHO = (
+    "Your last reply was only a format or word-count label, not a news summary. "
+    "Reply with ONLY 1-2 factual English sentences about the article, "
+    "or exactly SKIP/INSUFFICIENT per your rules. "
+    "Do not output 'English (…)', word counts, or meta labels."
 )
 
 
@@ -89,7 +98,31 @@ def strip_leading_summary_labels(text: str) -> str:
             s = re.sub(pat, "", s, count=1, flags=re.IGNORECASE).lstrip()
         if s == prev:
             break
-    return s
+    s = re.sub(
+        r"(?is)^english\s*\([^)]{0,80}?words?\s*\)\s*(\n\s*)+",
+        "",
+        s,
+        count=1,
+    )
+    return s.lstrip()
+
+
+def _is_meta_wordcount_echo(s: str) -> bool:
+    """True when the model replied with only a word-count / format stub (no real summary)."""
+    t = (s or "").strip()
+    if not t or len(t) > 120:
+        return False
+    if re.match(
+        r"(?is)^english\s*[\(\[][≤=<\d\s.\u2264]{0,24}words?\s*[\)\]]\s*$",
+        t,
+    ):
+        return True
+    if re.match(
+        r"(?is)^english\s*[-–—]\s*\d+\s*sentences?.{0,60}words?\s*$",
+        t,
+    ):
+        return True
+    return False
 
 
 _DE_DOMESTIC_NOT_ISRAEL = re.compile(
@@ -222,7 +255,8 @@ def summarize_in_english(
 
     result = ""
     insuf_hint_tier = 0
-    for attempt in range(2):
+    pending_anti_echo = False
+    for attempt in range(3):
         if attempt >= 1:
             _TEL.stage2_retries += 1
         user_blob = f"Article: {text[:stage2_limit]}"
@@ -232,6 +266,9 @@ def summarize_in_english(
             user_blob = f"{user_blob}\n\n{strong_insuf_note}"
         elif attempt >= 1 and len(result) > 0 and len(result) < 15:
             user_blob = f"{user_blob}\n\n{short_retry_note}"
+        if pending_anti_echo:
+            user_blob = f"{user_blob}\n\n{_STAGE2_ANTI_ECHO}"
+            pending_anti_echo = False
 
         response = call_stage2(user_blob)
         finish = response.choices[0].finish_reason
@@ -243,6 +280,13 @@ def summarize_in_english(
 
         if result.upper().startswith("SKIP"):
             return None, None
+
+        if _is_meta_wordcount_echo(result):
+            log.warning("Stage 2 returned word-count label echo (attempt %s)", attempt + 1)
+            if attempt >= 2:
+                return None, "model returned prompt label instead of summary"
+            pending_anti_echo = True
+            continue
 
         is_insuf = result.upper().startswith("INSUF")
         if is_insuf:

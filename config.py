@@ -9,7 +9,16 @@ FEEDS = [
     "https://www.wroclaw.pl/dla-mieszkanca/rss",
     "https://www.wroclaw.pl/komunikacja/rss",
     "https://www.wroclaw.pl/urzad/rss",
+    "https://www.wroclaw.pl/przedsiebiorczy-wroclaw/rss",
+    "https://www.wroclaw.pl/zielony-wroclaw/rss",
+    "https://www.wroclaw.pl/akademicki-wroclaw/rss",
+    "https://www.wroclaw.pl/rozmawia/rss",
+    "https://www.wroclaw.pl/kultura/rss",
+    "https://www.wroclaw.pl/ua/rss",
+    # Not added: wroclaw.pl/sport/rss — channel scope skips sports (wasted fetch/classify).
     # Regional news outlets (RSS confirmed)
+    # Nasze Miasto Wrocław (section feed; root /rss/ hits Cloudflare for bots)
+    "https://wroclaw.naszemiasto.pl/rss/artykuly/1212.xml",
     "https://www.radiowroclaw.pl/articles/rss",
     "https://tuwroclaw.com/rss",
     # Gazeta Wrocławska (RSS exists; pre-skip obvious listicles to reduce cost)
@@ -29,6 +38,21 @@ LISTICLE_TITLE_SKIP = re.compile(
     r"gotowe\s+pomys[lł]y|[zż]yczenia"
     r")\b"
 )
+
+# Radio Wrocław RSS emits a rolling "latest news" hub row, not one story (thin / mixed headlines).
+RADIO_WROC_TICKER_TITLE_SKIP = re.compile(
+    r"(?is)aktualno[sś]ci\s+radia\s+wroc[lł]aw",
+)
+
+
+def should_skip_radio_wroc_ticker_title(title: str | None) -> bool:
+    if not title or not isinstance(title, str):
+        return False
+    return bool(RADIO_WROC_TICKER_TITLE_SKIP.search(title.strip()))
+
+
+def radio_wroc_ticker_skip_reason() -> str:
+    return "rss teaser: Radio Wrocław aktualności ticker (hub, not one article)"
 
 # Guard against stale RSS items resurfacing.
 # We only ingest items from the last 24 hours.
@@ -269,7 +293,11 @@ SYSTEM_PROMPT = (
     "Poland-wide politics is **GO** only if it has a clear and specific Dolnośląskie/Wrocław angle.\n"
     "GEO: keep **place names in the original Polish Latin spelling** (Wrocław, Dolnośląskie, Wałbrzych). "
     "Never invent locations.\n\n"
-    "Reply with exactly one line, no preamble:\n"
+    "Reply with exactly **one** line and **no** preamble.\n"
+    "**Either** the token SKIP or INSUFFICIENT with the short reason (as below), "
+    f"**or** only the factual English summary: **1–2 sentences, at most {_SUMMARY_CAP} words total**.\n"
+    "Never reply with a meta line about format (do **not** output word-count parentheses, "
+    "and do **not** write lines like 'English (≤N words)' or 'English - 1-2 sentences').\n\n"
     "SKIP - sports.\n"
     "SKIP - outside Dolnośląskie: stories that are clearly about another region/country with no direct Dolnośląskie/Wrocław tie.\n"
     "SKIP - service/lifestyle and low-signal noise: shopping/coupons/listicles, horoscopes/quizzes, travel/restaurant 'what to do', "
@@ -278,11 +306,10 @@ SYSTEM_PROMPT = (
     "SKIP - markets daily churn (crypto/stock up-down today) unless there is a concrete enforcement/regulatory decision, major platform outage, "
     "or clear local impact.\n"
     "INSUFFICIENT - only when the body truly adds almost nothing beyond the title: "
-    "no names, no agencies, no dates or numbers, no attributed claims, no decision in one clause.\n"
-    f"English - 1-2 sentences, ≤{_SUMMARY_CAP} words\n\n"
+    "no names, no agencies, no dates or numbers, no attributed claims, no decision in one clause.\n\n"
     "If the Polish text names people, agencies, dates, figures, decisions, or quotes — summarize in English; "
     "not INSUFFICIENT.\n\n"
-    "When outputting English, write only the summary text—never prefix with English:, Summary:, etc. "
+    "When you summarize, write **only** the summary—never prefix with English:, Summary:, or similar labels. "
     "Use Latin script. Keep **every Polish placename in Latin as in the source** (Wrocław, Dolnośląskie). "
     "Paraphrase, no quotes. Use clear, standard English.\n\n"
     "Do not translate the administrative term **województwo**; keep it in Latin as **województwo**.\n\n"
@@ -291,8 +318,7 @@ SYSTEM_PROMPT = (
     "Nested time / old quotes in a current story: When the Polish text ties today's news to words spoken or roles held "
     "in an earlier year, the English must make the chain explicit: "
     "who is speaking now; if only the outlet recalls past context, say so; "
-    "and separately who originally said it, with year and role **then**.\n\n"
-    f"Labels exactly: SKIP | INSUFFICIENT | English (≤{_SUMMARY_CAP} words)"
+    "and separately who originally said it, with year and role **then**."
 )
 
 CLASSIFY_PROMPT = (

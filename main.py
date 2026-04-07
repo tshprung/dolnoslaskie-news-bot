@@ -12,6 +12,8 @@ from config import (
     DRY_RUN_MAX_POSTS,
     LISTICLE_TITLE_SKIP,
     SPORTS_KEYWORDS,
+    radio_wroc_ticker_skip_reason,
+    should_skip_radio_wroc_ticker_title,
     should_skip_sponsored,
     sponsored_skip_reason,
     skip_admin_notify_for_article,
@@ -58,6 +60,10 @@ def main():
                 continue
             if LISTICLE_TITLE_SKIP.search(article["title"] or ""):
                 log.info(f"Skipped (listicle/quiz keyword): {article['title'][:70]}")
+                _mark_article_done(conn, article)
+                continue
+            if should_skip_radio_wroc_ticker_title(article.get("title")):
+                log.info(f"Skipped ({radio_wroc_ticker_skip_reason()}): {article['title'][:70]}")
                 _mark_article_done(conn, article)
                 continue
             if SPORTS_KEYWORDS.search(article["title"]):
