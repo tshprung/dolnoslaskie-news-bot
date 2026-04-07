@@ -1,0 +1,106 @@
+import html
+import logging
+import sqlite3
+import time
+
+from openai import OpenAI
+
+from config import (
+    ADMIN_TELEGRAM_ID,
+    AGGREGATOR_URL_SKIP,
+    DRY_RUN,
+    DRY_RUN_MAX_POSTS,
+    SPORTS_KEYWORDS,
+    should_skip_sponsored,
+    sponsored_skip_reason,
+    skip_admin_notify_for_article,
+)
+from database import get_new_articles, init_db, record_seen_url
+from dedup import deduplicate, record_sent_snapshot
+from http_util import make_http_session, request_timeout
+from summarize import openai_client, summarize_in_hebrew
+from telegram_bot import notify_admin, send_to_telegram, telegram_html_anchor
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+log = logging.getLogger(__name__)
+
+
+def _mark_article_done(conn: sqlite3.Connection, article: dict) -> None:
+    conn.execute("INSERT OR IGNORE INTO seen_articles (id) VALUES (?)", (article["id"],))
+    record_seen_url(conn, article.get("url_norm", ""))
+    conn.commit()
+
+
+def main():
+    conn = init_db()
+    session = make_http_session()
+    to = request_timeout()
+    client: OpenAI = openai_client()
+
+    if not ADMIN_TELEGRAM_ID:
+        log.warning("ADMIN_TELEGRAM_ID is unset — failed articles will not DM you")
+
+    new_articles = get_new_articles(conn)
+    new_articles.sort(key=lambda a: a["sort_key"])
+    new_articles = deduplicate(conn, new_articles)
+    log.info(f"Found {len(new_articles)} new articles after deduplication")
+    sent_count = 0
+
+    for article in new_articles:
+        try:
+            if AGGREGATOR_URL_SKIP.search(article["link"]):
+                log.info(f"Skipped (ticker/aggregator URL): {article['title'][:70]}")
+                _mark_article_done(conn, article)
+                continue
+            if SPORTS_KEYWORDS.search(article["title"]):
+                log.info(f"Skipped (sports keyword): {article['title'][:70]}")
+                _mark_article_done(conn, article)
+                continue
+            if should_skip_sponsored(article.get("title"), article.get("summary"), article.get("link")):
+                log.info(f"Skipped ({sponsored_skip_reason()}): {article['title'][:70]}")
+                _mark_article_done(conn, article)
+                continue
+            hebrew, skip_reason = summarize_in_hebrew(client, session, to, article)
+            if hebrew is None:
+                if skip_reason:
+                    log.info(f"Skipped ({skip_reason}): {article['title'][:70]}")
+                    if not skip_admin_notify_for_article(article, skip_reason):
+                        notify_admin(session, article, skip_reason, ADMIN_TELEGRAM_ID, to)
+                else:
+                    log.info(f"Skipped (not Dolnośląskie-related): {article['title'][:70]}")
+                _mark_article_done(conn, article)
+                continue
+            body = html.escape(hebrew, quote=False)
+            footer_label = f"{article['source']} | {article['date']}"
+            message = f"{body}\n\n{telegram_html_anchor(article['link'], footer_label)}"
+            # Mark seen BEFORE sending so a crash after Telegram POST
+            # doesn't cause reposts on the next cron run.
+            _mark_article_done(conn, article)
+            if DRY_RUN:
+                log.info("DRY_RUN would send: %s", message.replace("\n", " ")[:240])
+            else:
+                send_to_telegram(session, message, timeout=to)
+            record_sent_snapshot(conn, article)
+            conn.commit()
+            log.info(f"Sent: {article['title'][:70]}")
+            sent_count += 1
+            if DRY_RUN and sent_count >= DRY_RUN_MAX_POSTS:
+                log.info("DRY_RUN reached max posts (%s); stopping early", DRY_RUN_MAX_POSTS)
+                break
+            time.sleep(5)
+        except Exception as e:
+            log.exception("Error on article %s", article["id"])
+            try:
+                if not skip_admin_notify_for_article(article):
+                    notify_admin(session, article, f"runtime error: {e}", ADMIN_TELEGRAM_ID, to)
+            except Exception:
+                pass
+
+    conn.close()
+
+
+if __name__ == "__main__":
+    main()
