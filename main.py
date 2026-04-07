@@ -75,7 +75,7 @@ def main():
                     if not skip_admin_notify_for_article(article, skip_reason):
                         notify_admin(session, article, skip_reason, ADMIN_TELEGRAM_ID, to)
                 else:
-                    log.info(f"Skipped (not Dolnośląskie-related): {article['title'][:70]}")
+                    log.info(f"Skipped (classifier: SKIP): {article['title'][:70]}")
                 _mark_article_done(conn, article)
                 continue
             body = html.escape(hebrew, quote=False)
