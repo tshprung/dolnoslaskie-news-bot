@@ -23,7 +23,7 @@ FEEDS = [
 LISTICLE_TITLE_SKIP = re.compile(
     r"(?is)\b("
     r"quiz|horoskop|imieniu|"
-    r"tak\s+wygl[aą]da|tak\s+teraz\s+wygl[aą]da|"
+    r"tak\s+wygl[aą]d(?:a|aj[aą])|tak\s+teraz\s+wygl[aą]d(?:a|aj[aą])|"
     r"sp[oó]jrz|zobacz|"
     r"najmniejsz|najpi[eę]kniejsz|"
     r"gotowe\s+pomys[lł]y|[zż]yczenia"
