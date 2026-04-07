@@ -62,6 +62,22 @@ def test_insufficient_immediate_when_body_unreachable(monkeypatch):
     assert "no usable article text" in reason or "paywall" in reason
 
 
+def test_fetch_blocked_403_still_summarizes_when_rss_excerpt_substantial(monkeypatch):
+    monkeypatch.setattr(
+        "summarize.fetch_article_body",
+        lambda *_a, **_k: ("", "fetch blocked (403 Forbidden): https://example.com/x"),
+    )
+    article = {
+        "link": "https://example.com/x",
+        "title": "Wrocław: Police appeal for witnesses after MPK incident",
+        "summary": "Police are looking for a young man after an assault on a ticket inspector at Gajowicka tram stop. Witnesses are asked to contact police.",
+    }
+    client = _client_with_responses("GO", "Police are seeking witnesses after an assault on an MPK ticket inspector at a Wrocław tram stop.")
+    out, reason = summarize_in_english(client, MagicMock(), (1, 2), article)
+    assert reason is None
+    assert out is not None and "police" in out.lower()
+
+
 def test_stage2_latin_only_then_english_ok(monkeypatch):
     body = "Umfrage: Mehrheit der Befragten in Berlin sieht die Reform skeptisch."
     monkeypatch.setattr("summarize.fetch_article_body", lambda *_a, **_k: (body, None))

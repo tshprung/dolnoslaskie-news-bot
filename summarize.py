@@ -168,9 +168,7 @@ def summarize_in_english(
     body, fetch_err = fetch_article_body(session, article["link"], http_timeout)
     if body:
         _TEL.body_fetched_chars += len(body)
-    if fetch_err:
-        # Always prefer explicit fetch failure reasons so we can DM admin on blocks (403/WAF/etc).
-        return None, fetch_err
+    fetch_blocked_reason = fetch_err
     if should_skip_discrimination_klagen_filler(
         article.get("title"),
         article.get("summary"),
@@ -184,6 +182,10 @@ def summarize_in_english(
         or _rss_excerpt_substantial(article)
         or len(rss_text.strip()) >= 280
     )
+    if fetch_blocked_reason and not body_available:
+        # If we were blocked (403/WAF/etc) AND the RSS excerpt is too thin to summarize,
+        # keep the explicit reason so main.py can DM the admin.
+        return None, fetch_blocked_reason
 
     decision = classify(client, text)
     if decision == "SKIP":
