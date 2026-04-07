@@ -36,7 +36,7 @@ def _client_with_responses(*contents_and_reasons):
 def test_insufficient_with_body_short_text(monkeypatch):
     monkeypatch.setattr(
         "summarize.fetch_article_body",
-        lambda _session, _url, _to: "Kurz. " * 3,
+        lambda _session, _url, _to: ("Kurz. " * 3, None),
     )
     article = {
         "link": "https://www.tagesschau.de/inland/test-1.html",
@@ -50,7 +50,7 @@ def test_insufficient_with_body_short_text(monkeypatch):
 
 
 def test_insufficient_immediate_when_body_unreachable(monkeypatch):
-    monkeypatch.setattr("summarize.fetch_article_body", lambda *_a, **_k: "")
+    monkeypatch.setattr("summarize.fetch_article_body", lambda *_a, **_k: ("", None))
     article = {
         "link": "https://www.zeit.de/test",
         "title": "Nur Titel",
@@ -64,7 +64,7 @@ def test_insufficient_immediate_when_body_unreachable(monkeypatch):
 
 def test_stage2_latin_only_then_english_ok(monkeypatch):
     body = "Umfrage: Mehrheit der Befragten in Berlin sieht die Reform skeptisch."
-    monkeypatch.setattr("summarize.fetch_article_body", lambda *_a, **_k: body)
+    monkeypatch.setattr("summarize.fetch_article_body", lambda *_a, **_k: (body, None))
     article = {
         "link": "https://www.zeit.de/umfrage-test",
         "title": "Umfrage",
@@ -83,7 +83,7 @@ def test_berlin_geo_mismatch(monkeypatch):
         "Großbrand am Brandenburger Tor in Berlin; Feuerwehr im Einsatz. "
         * 10
     )
-    monkeypatch.setattr("summarize.fetch_article_body", lambda *_a, **_k: body)
+    monkeypatch.setattr("summarize.fetch_article_body", lambda *_a, **_k: (body, None))
     article = {
         "link": "https://www.tagesschau.de/inland/berlin-1.html",
         "title": "Einsatz Berlin",

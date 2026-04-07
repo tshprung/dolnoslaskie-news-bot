@@ -24,7 +24,7 @@ def test_zeit_2026_hub_matches():
 
 
 def test_zeit_skips_before_fetch_and_openai(monkeypatch):
-    monkeypatch.setattr("summarize.fetch_article_body", lambda *_a, **_k: "")
+    monkeypatch.setattr("summarize.fetch_article_body", lambda *_a, **_k: ("", None))
     article = {
         "link": "https://www.zeit.de/2026/15/klamotten-marketing-absurd-aldi-lidl-kfc-crocs",
         "title": "Test",

@@ -20,7 +20,7 @@ def test_bild_slug_diskriminierungs_klagen_miese_geschaeft():
 
 
 def test_summarize_short_circuits_on_slug_without_openai(monkeypatch):
-    monkeypatch.setattr("summarize.fetch_article_body", lambda *_a, **_k: "")
+    monkeypatch.setattr("summarize.fetch_article_body", lambda *_a, **_k: ("", None))
     article = {
         "link": (
             "https://www.bild.de/news/inland/"

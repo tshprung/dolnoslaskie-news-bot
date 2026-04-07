@@ -201,7 +201,9 @@ def _article_body_from_dom_wroclaw(stripped_html: str) -> str:
     return out
 
 
-def fetch_article_body(session: requests.Session, url: str, timeout: tuple) -> str:
+def fetch_article_body(
+    session: requests.Session, url: str, timeout: tuple
+) -> tuple[str, str | None]:
     paywall_signals = [
         "zaloguj się",
         "registrieren",
@@ -247,7 +249,7 @@ def fetch_article_body(session: requests.Session, url: str, timeout: tuple) -> s
                 return ""
             text = _trim_boilerplate(text)
             log.info(f"Fetched {len(text)} chars (JSON-LD) from {url}")
-            return text
+            return text, None
 
         stripped = re.sub(
             r"<script\b[^>]*>.*?</script>", " ", page_html, flags=re.DOTALL | re.IGNORECASE
@@ -264,10 +266,10 @@ def fetch_article_body(session: requests.Session, url: str, timeout: tuple) -> s
         if len(text) >= 250:
             if any(s in text.lower() for s in paywall_signals) and len(text) < 500:
                 log.warning(f"Paywall detected at {url}, ignoring fetched content")
-                return ""
+                return "", "insufficient text (paywall/teaser/login; not enough free content for summary)"
             text = _trim_boilerplate(text.strip())
             log.info(f"Fetched {len(text)} chars (DOM) from {url}")
-            return text
+            return text, None
 
         def extract_paragraphs(source):
             paragraphs = re.findall(r"<p[^>]*>(.*?)</p>", source, re.DOTALL)
@@ -289,10 +291,15 @@ def fetch_article_body(session: requests.Session, url: str, timeout: tuple) -> s
             text = extract_paragraphs(stripped).strip()
         if any(s in text.lower() for s in paywall_signals) and len(text) < 500:
             log.warning(f"Paywall detected at {url}, ignoring fetched content")
-            return ""
+            return "", "insufficient text (paywall/teaser/login; not enough free content for summary)"
         text = _trim_boilerplate(text.strip())
         log.info(f"Fetched {len(text)} chars from {url}")
-        return text
+        return text, None
+    except requests.HTTPError as e:
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if status == 403:
+            return "", f"fetch blocked (403 Forbidden): {url}"
+        return "", f"fetch failed (HTTP {status}): {url}"
     except Exception as e:
         log.warning(f"Could not fetch article body from {url}: {e}")
-        return ""
+        return "", f"fetch failed: {url}"

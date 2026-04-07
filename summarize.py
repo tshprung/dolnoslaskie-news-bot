@@ -165,9 +165,12 @@ def summarize_in_english(
         return None, f"paywalled domain ({domain})"
     if is_zeit_archive_skip_url(article.get("link")):
         return None, zeit_archive_skip_reason()
-    body = fetch_article_body(session, article["link"], http_timeout)
+    body, fetch_err = fetch_article_body(session, article["link"], http_timeout)
     if body:
         _TEL.body_fetched_chars += len(body)
+    if fetch_err:
+        # Always prefer explicit fetch failure reasons so we can DM admin on blocks (403/WAF/etc).
+        return None, fetch_err
     if should_skip_discrimination_klagen_filler(
         article.get("title"),
         article.get("summary"),
