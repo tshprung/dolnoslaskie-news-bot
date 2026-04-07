@@ -1,4 +1,4 @@
-"""OpenAI: classify + Hebrew summary from German sources."""
+"""OpenAI: classify + English summary for Dolnośląskie sources."""
 import atexit
 import html
 import logging
@@ -65,28 +65,23 @@ def _log_run_telemetry() -> None:
         avg_body,
     )
 
-_HEBREW_CHAR_RE = re.compile(r"[\u0590-\u05FF\uFB1D-\uFB4F]")
-_SANITIZE_HB_LINE = re.compile(
-    r"[^\u0590-\u05FF\uFB1D-\uFB4FA-Za-z0-9\u00C0-\u024F\s,.:;!?%()\"\'-]"
-)
+_SANITIZE_EN_LINE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
 
 
-def _sanitize_hebrew_summary_line(result: str) -> str:
-    """Decode HTML entities before stripping chars, or &#34; becomes garbage \"34;\"."""
-    return _SANITIZE_HB_LINE.sub("", html.unescape(result)).strip()
+def _sanitize_english_summary_line(result: str) -> str:
+    """Decode HTML entities; strip control chars; keep punctuation and diacritics."""
+    return _SANITIZE_EN_LINE.sub("", html.unescape(result)).strip()
 
 _LEADING_LABEL_PATTERNS = (
-    r"^עברית\s*:\s*",
-    r"^עברית\s*-\s*",
-    r"^תרגום\s*:\s*",
-    r"^סיכום\s*:\s*",
-    r"^hebrew\s*:\s*",
+    r"^english\s*:\s*",
+    r"^english\s*-\s*",
     r"^summary\s*:\s*",
+    r"^summary\s*-\s*",
 )
 
 
 def strip_leading_summary_labels(text: str) -> str:
-    """Remove model echoes like 'עברית:' before the real summary."""
+    """Remove model echoes like 'English:' / 'Summary:' before the real summary."""
     s = text.strip()
     for _ in range(4):
         prev = s
@@ -113,7 +108,7 @@ _DE_DOMESTIC_NOT_ISRAEL = re.compile(
 
 
 def _source_suggests_germany_domestic_not_israel(german_blob: str) -> bool:
-    """True if text looks like domestic German news (Länder, hospitals, federal bodies) without Israel."""
+    """Legacy helper; kept for compatibility with copied tests/config."""
     f = fold_de(german_blob[:8000])
     if not _DE_DOMESTIC_NOT_ISRAEL.search(f):
         return False
@@ -218,9 +213,7 @@ def summarize_in_hebrew(
         "Examples: Bundestag, Bundesregierung, EU diplomacy, Länder — summarize who said/did what. "
         "Reply INSUFFICIENT only when there are no extractable facts beyond the headline."
     )
-    short_retry_note = (
-        f"Output a real Hebrew sentence (not empty); max {_SUMMARY_CAP} words."
-    )
+    short_retry_note = f"Output a real English sentence (not empty); max {_SUMMARY_CAP} words."
 
     result = ""
     insuf_hint_tier = 0
@@ -246,7 +239,7 @@ def summarize_in_hebrew(
         if result.upper().startswith("SKIP") or result.startswith("סקיפ"):
             return None, None
 
-        is_insuf = result.upper().startswith("INSUF") or result.startswith("לא מספיק")
+        is_insuf = result.upper().startswith("INSUF")
         if is_insuf:
             if not body_available:
                 return None, _SKIPPED_NO_BODY
@@ -266,7 +259,7 @@ def summarize_in_hebrew(
         if attempt >= 2:
             return None, "response too short after retry"
 
-    if result.upper().startswith("INSUF") or result.startswith("לא מספיק"):
+    if result.upper().startswith("INSUF"):
         if not body_available:
             return None, _SKIPPED_NO_BODY
         return None, _SKIPPED_PAYWALL_TEASER
@@ -275,66 +268,13 @@ def summarize_in_hebrew(
 
     result = strip_leading_summary_labels(result)
 
-    result = _sanitize_hebrew_summary_line(result)
+    result = _sanitize_english_summary_line(result)
     if not result:
         return None, "sanitization left empty result"
-
-    if not _HEBREW_CHAR_RE.search(result):
-        log.warning("Stage 2: no Hebrew after sanitize — retry with Hebrew-only instruction")
-        hebrew_only_note = (
-            "You must write the summary using Hebrew letters (עברית). Your previous reply had no Hebrew. "
-            "1-2 factual sentences; Latin script only for proper names. "
-            f"Max {_SUMMARY_CAP} words. Do not output English-only or German-only text."
-        )
-        response = call_stage2(f"Article: {text[:stage2_limit]}\n\n{hebrew_only_note}")
-        finish = response.choices[0].finish_reason
-        if finish == "content_filter":
-            return None, "blocked by content policy (content_filter)"
-        if finish == "length":
-            return None, "response truncated"
-        result = (response.choices[0].message.content or "").strip()
-        if result.upper().startswith("SKIP") or result.startswith("סקיפ"):
-            return None, None
-        is_insuf = result.upper().startswith("INSUF") or result.startswith("לא מספיק")
-        if is_insuf:
-            if not body_available:
-                return None, _SKIPPED_NO_BODY
-            return None, _SKIPPED_PAYWALL_TEASER
-        if len(result) < 15:
-            return None, "no Hebrew characters in result"
-        result = strip_leading_summary_labels(result)
-        result = _sanitize_hebrew_summary_line(result)
-        if not result:
-            return None, "sanitization left empty result"
-        if not _HEBREW_CHAR_RE.search(result):
-            return None, "no Hebrew characters in result"
-
-    m_heb = _HEBREW_CHAR_RE.search(result)
-    result = result[m_heb.start() :].strip()
-    if len(result) < 15:
-        return None, "Hebrew too short after removing leading non-Hebrew (likely echoed input)"
-
-    _hebrew_glue = r"\u0590-\u05FF\uFB1D-\uFB4F"
-    _latin_glue = r"A-Za-z\u00C0-\u024F"
-    result = re.sub(rf"[{_hebrew_glue}]+(?=[{_latin_glue}])", "", result)
-    result = re.sub(rf"(?<=[{_latin_glue}])[{_hebrew_glue}]+", "", result)
-    result = result.strip()
-
-    hebrew_re = _HEBREW_CHAR_RE
-    latin_re = re.compile(r"[A-Za-z]")
-    for token in re.split(r"[\s\-]+", result):
-        if hebrew_re.search(token) and latin_re.search(token):
-            return None, f"mixed-script word detected: '{token}'"
 
     word_count = len(result.split())
     if word_count > MAX_SUMMARY_WORDS_HARD:
         return None, f"summary too long ({word_count} words, max {MAX_SUMMARY_WORDS})"
-
-    if _source_suggests_germany_domestic_not_israel(text) and _hebrew_mentions_major_israeli_city(
-        result
-    ):
-        log.warning("GEO guard: German domestic source but Hebrew cited Tel Aviv/Jerusalem")
-        return None, "GEO mismatch (German domestic story vs Israeli city in Hebrew; re-run)"
 
     return result, None
 

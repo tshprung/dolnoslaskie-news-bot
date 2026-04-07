@@ -2,7 +2,7 @@
 import requests
 
 from article_fetch import _html_text
-from summarize import _sanitize_hebrew_summary_line
+from summarize import _sanitize_english_summary_line
 
 
 def test_html_text_prefers_utf8_when_requests_default_is_latin1():
@@ -19,8 +19,7 @@ def test_html_text_prefers_utf8_when_requests_default_is_latin1():
 
 def test_html_numeric_entities_not_turned_into_spurious_34():
     """&#34; must not become \"34;\" after stripping & and # from the summary line."""
-    s = "מועצת תורינגיה &#34;שלום ודיפלומטיה&#34; בשלב הבא."
-    out = _sanitize_hebrew_summary_line(s)
+    s = 'Wrocław council says &#34;more safety&#34; next week.'
+    out = _sanitize_english_summary_line(s)
     assert "34;" not in out
-    assert "דיפלומטיה34" not in out
-    assert "שלום" in out
+    assert "council" in out.lower()

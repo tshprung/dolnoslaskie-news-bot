@@ -1,4 +1,4 @@
-"""Weekly Hebrew community/support post (via channel in .env; cron ~Sunday 18:00 Warsaw)."""
+"""Weekly community/support post (English)."""
 from __future__ import annotations
 
 import html
@@ -41,18 +41,18 @@ def build_weekly_announce_html() -> str:
     email_esc = html.escape(email)
     kofi_href = html.escape(kofi, quote=True)
     lines = (
-        "היי,",
+        "Hi,",
         "",
-        "אני טל שפרונג, ואני מפעיל את הערוץ הזה כתחביב כדי להנגיש חדשות מקומיות בעברית לדוברי עברית בחו״ל.",
+        "I’m Tal Shprung, and I run this channel as a hobby to make local Dolnośląskie news accessible in English.",
         "",
-        "המערכת רצה אוטומטית ומשתמשת ב-AI, ויש לזה גם עלויות.",
-        "אם יש לכם פידבק או רעיונות לשיפור – אשמח לשמוע:",
+        "The system runs automatically and uses AI, which also has costs.",
+        "If you have feedback or ideas for improvement, I’d love to hear from you:",
         f'<a href="mailto:{email_esc}">{email_esc}</a>',
         "",
-        "אם אתם נהנים מהערוץ ורוצים לעזור להמשיך ולהפעיל אותו, אפשר לתמוך כאן:",
+        "If you enjoy the channel and want to help keep it running, you can support here:",
         f'<a href="{kofi_href}">ko-fi.com/talshprung</a>',
         "",
-        "התמיכה כמובן לא חובה אבל מאוד מוערכת 🙂",
+        "Support is optional, but very appreciated.",
     )
     return "\n".join(lines)
 
