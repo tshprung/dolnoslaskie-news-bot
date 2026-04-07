@@ -12,9 +12,23 @@ FEEDS = [
     # Regional news outlets (RSS confirmed)
     "https://www.radiowroclaw.pl/articles/rss",
     "https://tuwroclaw.com/rss",
+    # Gazeta Wrocławska (RSS exists; pre-skip obvious listicles to reduce cost)
+    "https://gazetawroclawska.pl/rss",
     # Lower Silesia (Dolnośląskie) regional admin/government beat
     "https://portalsamorzadowy.pl/rss/dolnoslaskie.xml",
 ]
+
+# Cheap pre-skip for low-signal listicles/quizzes that would otherwise waste OpenAI calls.
+# Keep this conservative; the classifier will handle borderline cases.
+LISTICLE_TITLE_SKIP = re.compile(
+    r"(?is)\b("
+    r"quiz|horoskop|imieniu|"
+    r"tak\s+wygl[aą]da|tak\s+teraz\s+wygl[aą]da|"
+    r"sp[oó]jrz|zobacz|"
+    r"najmniejsz|najpi[eę]kniejsz|"
+    r"gotowe\s+pomys[lł]y|[zż]yczenia"
+    r")\b"
+)
 
 # Guard against stale RSS items resurfacing.
 # We only ingest items from the last 24 hours.

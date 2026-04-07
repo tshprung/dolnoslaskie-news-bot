@@ -10,6 +10,7 @@ from config import (
     AGGREGATOR_URL_SKIP,
     DRY_RUN,
     DRY_RUN_MAX_POSTS,
+    LISTICLE_TITLE_SKIP,
     SPORTS_KEYWORDS,
     should_skip_sponsored,
     sponsored_skip_reason,
@@ -53,6 +54,10 @@ def main():
         try:
             if AGGREGATOR_URL_SKIP.search(article["link"]):
                 log.info(f"Skipped (ticker/aggregator URL): {article['title'][:70]}")
+                _mark_article_done(conn, article)
+                continue
+            if LISTICLE_TITLE_SKIP.search(article["title"] or ""):
+                log.info(f"Skipped (listicle/quiz keyword): {article['title'][:70]}")
                 _mark_article_done(conn, article)
                 continue
             if SPORTS_KEYWORDS.search(article["title"]):
