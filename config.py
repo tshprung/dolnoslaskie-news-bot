@@ -291,6 +291,9 @@ DISPLAY_TZ = "Europe/Warsaw"
 DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
 DRY_RUN_MAX_POSTS = int(os.environ.get("DRY_RUN_MAX_POSTS", "5"))
 
+# Telegram: show link preview card (image) like in screenshot.
+TELEGRAM_LINK_PREVIEW_ENABLED = os.environ.get("TELEGRAM_LINK_PREVIEW_ENABLED", "1") == "1"
+
 WEEKLY_ANNOUNCE_ENABLED = os.environ.get("WEEKLY_ANNOUNCE_ENABLED", "1") == "1"
 WEEKLY_ANNOUNCE_TZ = os.environ.get("WEEKLY_ANNOUNCE_TZ", "Europe/Warsaw")
 WEEKLY_ANNOUNCE_WEEKDAY = int(os.environ.get("WEEKLY_ANNOUNCE_WEEKDAY", "6"))

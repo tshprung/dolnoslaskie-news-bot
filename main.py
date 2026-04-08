@@ -12,6 +12,7 @@ from config import (
     DRY_RUN_MAX_POSTS,
     LISTICLE_TITLE_SKIP,
     SPORTS_KEYWORDS,
+    TELEGRAM_LINK_PREVIEW_ENABLED,
     radio_wroc_ticker_skip_reason,
     should_skip_radio_wroc_ticker_title,
     should_skip_sponsored,
@@ -87,6 +88,10 @@ def main():
             body = html.escape(summary, quote=False)
             footer_label = f"{article['source']} | {article['date']}"
             message = f"{body}\n\n{telegram_html_anchor(article['link'], footer_label)}"
+            if TELEGRAM_LINK_PREVIEW_ENABLED:
+                # Telegram generates the rich preview card (image) only for a raw URL,
+                # not for HTML anchors. Put it on its own line like the screenshot.
+                message = f"{message}\n{article['link']}"
             # Mark seen BEFORE sending so a crash after Telegram POST
             # doesn't cause reposts on the next cron run.
             _mark_article_done(conn, article)
