@@ -282,6 +282,11 @@ PAYWALLED_DOMAINS = frozenset()  # add domains if fetch keeps hitting hard paywa
 MAX_SUMMARY_WORDS = 50
 MAX_SUMMARY_WORDS_HARD = 60
 
+# Reduce OpenAI spend by limiting stage2 input size.
+# Default values tuned for local-news blurbs; raise if summaries degrade.
+STAGE2_INPUT_CHARS_DEFAULT = int(os.environ.get("STAGE2_INPUT_CHARS_DEFAULT", "1800"))
+STAGE2_INPUT_CHARS_LONG_BODY = int(os.environ.get("STAGE2_INPUT_CHARS_LONG_BODY", "2300"))
+
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHANNEL_ID = os.environ["TELEGRAM_CHANNEL_ID"]
 ADMIN_TELEGRAM_ID = os.environ.get("ADMIN_TELEGRAM_ID")
