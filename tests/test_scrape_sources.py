@@ -27,3 +27,14 @@ def test_extract_echo24_items_basic():
     assert items[0].url == "https://echo24.tv/pl/11_wiadomosci/94227_takiego-kalendarza-na-dolnym-slasku-nie-bylo.html"
     assert "kalendarza" in items[0].title.lower()
 
+
+def test_extract_echo24_items_accepts_absolute_href():
+    html = """
+    <html><body>
+      <a href="https://echo24.tv/pl/11_wiadomosci/94224_wielka-budowa-w-sercu-wroclawia.html?x=1">Wielka budowa w sercu Wrocławia</a>
+    </body></html>
+    """
+    items = extract_echo24_items(html, base_url="https://echo24.tv/")
+    assert len(items) == 1
+    assert items[0].url == "https://echo24.tv/pl/11_wiadomosci/94224_wielka-budowa-w-sercu-wroclawia.html"
+

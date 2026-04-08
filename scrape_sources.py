@@ -98,7 +98,11 @@ def extract_echo24_items(listing_html: str, base_url: str = "https://echo24.tv/"
     html = listing_html or ""
     out: list[ListingItem] = []
     seen: set[str] = set()
-    pat = re.compile(r"^/pl/11_wiadomosci/\d+_[^?#]+\.html$", re.IGNORECASE)
+    pat_rel = re.compile(r"^/pl/11_wiadomosci/\d+_[^?#]+\.html$", re.IGNORECASE)
+    pat_abs = re.compile(
+        r"^https?://(?:www\.)?echo24\.tv/pl/11_wiadomosci/\d+_[^?#]+\.html$",
+        re.IGNORECASE,
+    )
 
     try:
         from bs4 import BeautifulSoup  # type: ignore
@@ -108,12 +112,13 @@ def extract_echo24_items(listing_html: str, base_url: str = "https://echo24.tv/"
             href = (a.get("href") or "").strip()
             if not href:
                 continue
-            if not pat.match(href):
+            href_norm = _strip_query_and_fragment(urljoin(base_url, href))
+            if not (pat_rel.match(href) or pat_abs.match(href_norm)):
                 continue
             title = a.get_text(" ", strip=True)
             if not title or len(title) < 10:
                 continue
-            url = _strip_query_and_fragment(urljoin(base_url, href))
+            url = href_norm
             if url in seen:
                 continue
             seen.add(url)
