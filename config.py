@@ -27,6 +27,24 @@ FEEDS = [
     "https://portalsamorzadowy.pl/rss/dolnoslaskie.xml",
 ]
 
+# Non-RSS sources (hourly scrape of listing pages).
+SCRAPE_SOURCES = [
+    {
+        "key": "24wroclaw",
+        "list_url": "https://24wroclaw.pl/wiadomosci/",
+    },
+    {
+        "key": "echo24",
+        "list_url": "https://echo24.tv/",
+    },
+]
+# Gate scraping so RSS can run more often without extra traffic.
+SCRAPE_SOURCES_MIN_INTERVAL_SEC = int(os.environ.get("SCRAPE_SOURCES_MIN_INTERVAL_SEC", "3600"))
+# Per-run cap: avoid bursts if a layout change yields junk links.
+SCRAPE_SOURCES_MAX_NEW_URLS = int(os.environ.get("SCRAPE_SOURCES_MAX_NEW_URLS", "25"))
+SCRAPE_SOURCES_JITTER_MIN_SEC = float(os.environ.get("SCRAPE_SOURCES_JITTER_MIN_SEC", "1"))
+SCRAPE_SOURCES_JITTER_MAX_SEC = float(os.environ.get("SCRAPE_SOURCES_JITTER_MAX_SEC", "3"))
+
 # Cheap pre-skip for low-signal listicles/quizzes that would otherwise waste OpenAI calls.
 # Keep this conservative; the classifier will handle borderline cases.
 LISTICLE_TITLE_SKIP = re.compile(

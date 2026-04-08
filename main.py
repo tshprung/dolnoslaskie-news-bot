@@ -46,7 +46,7 @@ def main():
     if not ADMIN_TELEGRAM_ID:
         log.warning("ADMIN_TELEGRAM_ID is unset — failed articles will not DM you")
 
-    new_articles = get_new_articles(conn)
+    new_articles = get_new_articles(conn, session=session, timeout=to)
     new_articles.sort(key=lambda a: a["sort_key"])
     new_articles = deduplicate(conn, new_articles)
     log.info(f"Found {len(new_articles)} new articles after deduplication")
