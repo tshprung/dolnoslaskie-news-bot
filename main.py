@@ -12,6 +12,7 @@ from config import (
     DRY_RUN_MAX_POSTS,
     LISTICLE_TITLE_SKIP,
     SPORTS_KEYWORDS,
+    TELEGRAM_IMAGES_ENABLED,
     TELEGRAM_LINK_PREVIEW_ENABLED,
     radio_wroc_ticker_skip_reason,
     should_skip_radio_wroc_ticker_title,
@@ -23,7 +24,7 @@ from database import get_new_articles, init_db, record_seen_url
 from dedup import deduplicate, record_sent_snapshot
 from http_util import make_http_session, request_timeout
 from summarize import openai_client, summarize_in_english
-from telegram_bot import notify_admin, send_to_telegram, telegram_html_anchor
+from telegram_bot import notify_admin, send_photo_to_telegram, send_to_telegram, telegram_html_anchor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -75,7 +76,7 @@ def main():
                 log.info(f"Skipped ({sponsored_skip_reason()}): {article['title'][:70]}")
                 _mark_article_done(conn, article)
                 continue
-            summary, skip_reason = summarize_in_english(client, session, to, article)
+            summary, skip_reason, image_url = summarize_in_english(client, session, to, article)
             if summary is None:
                 if skip_reason:
                     log.info(f"Skipped ({skip_reason}): {article['title'][:70]}")
@@ -87,17 +88,27 @@ def main():
                 continue
             body = html.escape(summary, quote=False)
             footer_label = f"{article['source']} | {article['date']}"
-            message = f"{body}\n\n{telegram_html_anchor(article['link'], footer_label)}"
-            if TELEGRAM_LINK_PREVIEW_ENABLED:
-                # Telegram generates the rich preview card (image) only for a raw URL,
-                # not for HTML anchors. Put it on its own line like the screenshot.
-                message = f"{message}\n{article['link']}"
+            caption = f"{body}\n\n{telegram_html_anchor(article['link'], footer_label)}"
             # Mark seen BEFORE sending so a crash after Telegram POST
             # doesn't cause reposts on the next cron run.
             _mark_article_done(conn, article)
             if DRY_RUN:
-                log.info("DRY_RUN would send: %s", message.replace("\n", " ")[:240])
+                if TELEGRAM_IMAGES_ENABLED and image_url:
+                    log.info("DRY_RUN would sendPhoto: %s …", image_url[:100])
+                log.info("DRY_RUN would send: %s", caption.replace("\n", " ")[:240])
+            elif TELEGRAM_IMAGES_ENABLED and image_url:
+                try:
+                    send_photo_to_telegram(session, image_url, caption, timeout=to)
+                except Exception as e:
+                    log.warning("sendPhoto failed (%s); falling back to sendMessage", e)
+                    message = caption
+                    if TELEGRAM_LINK_PREVIEW_ENABLED:
+                        message = f"{message}\n{article['link']}"
+                    send_to_telegram(session, message, timeout=to)
             else:
+                message = caption
+                if TELEGRAM_LINK_PREVIEW_ENABLED:
+                    message = f"{message}\n{article['link']}"
                 send_to_telegram(session, message, timeout=to)
             record_sent_snapshot(conn, article)
             conn.commit()

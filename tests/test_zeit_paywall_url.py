@@ -24,14 +24,14 @@ def test_zeit_2026_hub_matches():
 
 
 def test_zeit_skips_before_fetch_and_openai(monkeypatch):
-    monkeypatch.setattr("summarize.fetch_article_body", lambda *_a, **_k: ("", None))
+    monkeypatch.setattr("summarize.fetch_article_body", lambda *_a, **_k: ("", None, None))
     article = {
         "link": "https://www.zeit.de/2026/15/klamotten-marketing-absurd-aldi-lidl-kfc-crocs",
         "title": "Test",
         "summary": "Lead",
     }
     client = MagicMock()
-    out, reason = summarize_in_english(client, MagicMock(), (1, 2), article)
+    out, reason, _img = summarize_in_english(client, MagicMock(), (1, 2), article)
     assert out is None
     assert reason == zeit_archive_skip_reason()
     assert reason.lower().startswith("rss teaser:")
