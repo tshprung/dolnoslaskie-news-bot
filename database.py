@@ -80,6 +80,17 @@ def init_db():
         "sort_epoch INTEGER NOT NULL)"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_dedup_recent_epoch ON dedup_recent(sort_epoch)")
+    # A second, optional dedup stream based on the *final English blurb* we post to Telegram.
+    # This catches repeats where RSS metadata differs but the generated summaries are near-identical.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS dedup_recent_en ("
+        "article_id TEXT PRIMARY KEY, "
+        "summary_en TEXT NOT NULL, "
+        "sort_epoch INTEGER NOT NULL)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dedup_recent_en_epoch ON dedup_recent_en(sort_epoch)"
+    )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS weekly_announce_sent ("
         "iso_week TEXT PRIMARY KEY, "
@@ -99,6 +110,7 @@ def init_db():
     conn.execute("DELETE FROM seen_article_urls WHERE seen_at < datetime('now', '-7 days')")
     cutoff = int(time.time()) - _DEDUP_RECENT_TTL_SEC
     conn.execute("DELETE FROM dedup_recent WHERE sort_epoch < ?", (cutoff,))
+    conn.execute("DELETE FROM dedup_recent_en WHERE sort_epoch < ?", (cutoff,))
     conn.commit()
     return conn
 

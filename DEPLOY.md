@@ -51,10 +51,17 @@ For a **public** repo you can still bootstrap with a normal `git clone` into `/o
 crontab -e
 ```
 
-Example (every 5 minutes; offset from Polish bot if you like):
+Example (every 30 minutes, on the **:20** and **:50** of each hour — avoids clashing with top-of-hour jobs):
 
 ```cron
-*/5 * * * * /opt/dolnoslaskie_news/run.sh
+20,50 * * * * /opt/dolnoslaskie_news/run.sh
+```
+
+If the server uses UTC but you want those minutes in **Europe/Warsaw**, prefix the line (same idea as the weekly job below):
+
+```cron
+CRON_TZ=Europe/Warsaw
+20,50 * * * * /opt/dolnoslaskie_news/run.sh
 ```
 
 **Weekly community message** (English intro + support link): `run_weekly_announce.sh` posts **once per ISO week** when the script runs in the configured window (default **Sunday 18:00** `Europe/Warsaw`). Use a **second** cron line with `CRON_TZ` so the hour matches Warsaw even if the server is UTC:

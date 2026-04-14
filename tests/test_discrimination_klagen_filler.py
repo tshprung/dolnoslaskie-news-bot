@@ -20,7 +20,7 @@ def test_bild_slug_diskriminierungs_klagen_miese_geschaeft():
 
 
 def test_summarize_short_circuits_on_slug_without_openai(monkeypatch):
-    monkeypatch.setattr("summarize.fetch_article_body", lambda *_a, **_k: ("", None, None))
+    monkeypatch.setattr("summarize.fetch_article_body", lambda *_a, **_k: ("", None))
     article = {
         "link": (
             "https://www.bild.de/news/inland/"
@@ -30,7 +30,7 @@ def test_summarize_short_circuits_on_slug_without_openai(monkeypatch):
         "summary": "",
     }
     client = MagicMock()
-    out, reason, _img = summarize_in_english(client, MagicMock(), (1, 2), article)
+    out, reason = summarize_in_english(client, MagicMock(), (1, 2), article)
     assert out is None
     assert reason == discrimination_klagen_filler_skip_reason()
     client.chat.completions.create.assert_not_called()

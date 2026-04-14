@@ -299,11 +299,6 @@ DRY_RUN_MAX_POSTS = int(os.environ.get("DRY_RUN_MAX_POSTS", "5"))
 # Telegram: show link preview card (image) like in screenshot.
 TELEGRAM_LINK_PREVIEW_ENABLED = os.environ.get("TELEGRAM_LINK_PREVIEW_ENABLED", "1") == "1"
 
-# Optional: send article hero image via sendPhoto (caption = summary + link). Default off.
-TELEGRAM_IMAGES_ENABLED = os.environ.get("TELEGRAM_IMAGES_ENABLED", "0") == "1"
-# Strict: image host must match article host or be its subdomain. If false, also allow same registrable domain (last two labels).
-TELEGRAM_IMAGES_STRICT = os.environ.get("TELEGRAM_IMAGES_STRICT", "1") == "1"
-
 WEEKLY_ANNOUNCE_ENABLED = os.environ.get("WEEKLY_ANNOUNCE_ENABLED", "1") == "1"
 WEEKLY_ANNOUNCE_TZ = os.environ.get("WEEKLY_ANNOUNCE_TZ", "Europe/Warsaw")
 WEEKLY_ANNOUNCE_WEEKDAY = int(os.environ.get("WEEKLY_ANNOUNCE_WEEKDAY", "6"))

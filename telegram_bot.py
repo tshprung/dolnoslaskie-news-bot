@@ -16,40 +16,6 @@ def telegram_html_anchor(url: str, label: str) -> str:
     )
 
 
-def send_photo_to_telegram(
-    session: requests.Session,
-    photo_url: str,
-    caption_html: str,
-    chat_id=None,
-    timeout: tuple = (5, 15),
-):
-    """Send photo by HTTPS URL with HTML caption (falls back to caller on failure)."""
-    cap = (caption_html or "").strip()
-    if len(cap) > 1024:
-        cap = cap[:1020].rstrip() + "…"
-    api = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-    resp = session.post(
-        api,
-        json={
-            "chat_id": chat_id or CHANNEL_ID,
-            "photo": photo_url,
-            "caption": cap,
-            "parse_mode": "HTML",
-        },
-        timeout=timeout,
-    )
-    try:
-        resp.raise_for_status()
-    except requests.HTTPError:
-        detail = ""
-        try:
-            detail = resp.json().get("description", "")
-        except Exception:
-            detail = resp.text[:200]
-        log.error("Telegram sendPhoto error: %s — %s", resp.status_code, detail)
-        raise
-
-
 def send_to_telegram(session: requests.Session, message, chat_id=None, timeout: tuple = (5, 15)):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     resp = session.post(
@@ -86,4 +52,4 @@ def notify_admin(session: requests.Session, article, reason, admin_chat_id: str 
         log.error(f"Failed to notify admin: {e}")
 
 
-__all__ = ["send_to_telegram", "send_photo_to_telegram", "notify_admin", "telegram_html_anchor"]
+__all__ = ["send_to_telegram", "notify_admin", "telegram_html_anchor"]

@@ -193,14 +193,14 @@ def summarize_in_english(
         rss_text += ". " + article["summary"]
 
     if should_skip_ultra_short_rss_item(article.get("title"), article.get("summary")):
-        return None, ultra_short_rss_skip_reason(), None
+        return None, ultra_short_rss_skip_reason()
 
     domain = urlparse(article["link"]).netloc.lstrip("www.")
     if domain in PAYWALLED_DOMAINS:
-        return None, f"paywalled domain ({domain})", None
+        return None, f"paywalled domain ({domain})"
     if is_zeit_archive_skip_url(article.get("link")):
-        return None, zeit_archive_skip_reason(), None
-    body, fetch_err, image_url = fetch_article_body(session, article["link"], http_timeout)
+        return None, zeit_archive_skip_reason()
+    body, fetch_err = fetch_article_body(session, article["link"], http_timeout)
     if body:
         _TEL.body_fetched_chars += len(body)
     fetch_blocked_reason = fetch_err
@@ -210,7 +210,7 @@ def summarize_in_english(
         article.get("link"),
         fetched_body=body,
     ):
-        return None, discrimination_klagen_filler_skip_reason(), image_url
+        return None, discrimination_klagen_filler_skip_reason()
     text = (article["title"] + ". " + body) if body else rss_text
     body_available = (
         bool(body and body.strip())
@@ -220,11 +220,11 @@ def summarize_in_english(
     if fetch_blocked_reason and not body_available:
         # If we were blocked (403/WAF/etc) AND the RSS excerpt is too thin to summarize,
         # keep the explicit reason so main.py can DM the admin.
-        return None, fetch_blocked_reason, image_url
+        return None, fetch_blocked_reason
 
     decision = classify(client, text)
     if decision == "SKIP":
-        return None, None, image_url
+        return None, None
 
     stage2_limit = int(STAGE2_INPUT_CHARS_DEFAULT)
     if not _rss_excerpt_substantial(article) and len(body or "") >= 4500:
@@ -275,25 +275,25 @@ def summarize_in_english(
         response = call_stage2(user_blob)
         finish = response.choices[0].finish_reason
         if finish == "content_filter":
-            return None, "blocked by content policy (content_filter)", image_url
+            return None, "blocked by content policy (content_filter)"
         if finish == "length":
-            return None, "response truncated", image_url
+            return None, "response truncated"
         result = (response.choices[0].message.content or "").strip()
 
         if result.upper().startswith("SKIP"):
-            return None, None, image_url
+            return None, None
 
         if _is_meta_wordcount_echo(result):
             log.warning("Stage 2 returned word-count label echo (attempt %s)", attempt + 1)
             if attempt >= 2:
-                return None, "model returned prompt label instead of summary", image_url
+                return None, "model returned prompt label instead of summary"
             pending_anti_echo = True
             continue
 
         is_insuf = result.upper().startswith("INSUF")
         if is_insuf:
             if not body_available:
-                return None, _SKIPPED_NO_BODY, image_url
+                return None, _SKIPPED_NO_BODY
             if insuf_hint_tier == 0:
                 insuf_hint_tier = 1
                 log.info("Stage 2 INSUFFICIENT — retry with hint (schedule/thin body)")
@@ -302,32 +302,32 @@ def summarize_in_english(
                 insuf_hint_tier = 2
                 log.info("Stage 2 INSUFFICIENT — retry with long-body hint")
                 continue
-            return None, _SKIPPED_PAYWALL_TEASER, image_url
+            return None, _SKIPPED_PAYWALL_TEASER
 
         if len(result) >= 15:
             break
         log.warning(f"Stage 2 response too short (attempt {attempt + 1}): '{result}'")
         if attempt >= 2:
-            return None, "response too short after retry", image_url
+            return None, "response too short after retry"
 
     if result.upper().startswith("INSUF"):
         if not body_available:
-            return None, _SKIPPED_NO_BODY, image_url
-        return None, _SKIPPED_PAYWALL_TEASER, image_url
+            return None, _SKIPPED_NO_BODY
+        return None, _SKIPPED_PAYWALL_TEASER
     if len(result) < 15:
-        return None, "response too short after retry", image_url
+        return None, "response too short after retry"
 
     result = strip_leading_summary_labels(result)
 
     result = _sanitize_english_summary_line(result)
     if not result:
-        return None, "sanitization left empty result", image_url
+        return None, "sanitization left empty result"
 
     word_count = len(result.split())
     if word_count > MAX_SUMMARY_WORDS_HARD:
-        return None, f"summary too long ({word_count} words, max {MAX_SUMMARY_WORDS})", image_url
+        return None, f"summary too long ({word_count} words, max {MAX_SUMMARY_WORDS})"
 
-    return result, None, image_url
+    return result, None
 
 
 def openai_client() -> OpenAI:

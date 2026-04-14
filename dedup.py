@@ -206,6 +206,28 @@ def load_dedup_snapshots(conn: sqlite3.Connection, window_hours: int):
     return rows
 
 
+def load_dedup_en_snapshots(conn: sqlite3.Connection, window_hours: int):
+    cutoff = int(datetime.now(timezone.utc).timestamp()) - window_hours * 3600
+    cur = conn.execute(
+        "SELECT article_id, summary_en, sort_epoch FROM dedup_recent_en WHERE sort_epoch >= ?",
+        (cutoff,),
+    )
+    rows = []
+    for article_id, summary_en, sort_epoch in cur.fetchall():
+        rows.append(
+            {
+                "id": article_id,
+                "title": "",
+                "summary": summary_en or "",
+                "link": "",
+                "source": "",
+                "date": "",
+                "sort_key": datetime.fromtimestamp(int(sort_epoch), tz=timezone.utc),
+            }
+        )
+    return rows
+
+
 def record_sent_snapshot(conn: sqlite3.Connection, article: dict):
     sk = int(article["sort_key"].timestamp())
     summary = (article.get("summary") or "")[:DEDUP_CONTENT_SUMMARY_CHARS]
@@ -214,6 +236,43 @@ def record_sent_snapshot(conn: sqlite3.Connection, article: dict):
         "VALUES (?, ?, ?, ?)",
         (article["id"], article["title"], summary, sk),
     )
+
+
+def record_sent_en_snapshot(
+    conn: sqlite3.Connection, article_id: str, summary_en: str, sort_key: datetime
+):
+    if not article_id:
+        return
+    s = (summary_en or "").strip()
+    if not s:
+        return
+    sk = int(sort_key.timestamp())
+    s = s[:2000]
+    conn.execute(
+        "INSERT OR REPLACE INTO dedup_recent_en (article_id, summary_en, sort_epoch) "
+        "VALUES (?, ?, ?)",
+        (article_id, s, sk),
+    )
+
+
+def is_english_near_duplicate(
+    conn: sqlite3.Connection, article_id: str, summary_en: str, sort_key: datetime
+) -> tuple[bool, str]:
+    probe = {
+        "id": article_id,
+        "title": "",
+        "summary": (summary_en or "").strip(),
+        "sort_key": sort_key,
+    }
+    if not probe["summary"]:
+        return False, ""
+    window = timedelta(hours=DEDUP_WINDOW_HOURS)
+    prior = load_dedup_en_snapshots(conn, DEDUP_WINDOW_HOURS)
+    for seen in prior:
+        dup, detail = _is_near_duplicate(probe, seen, window)
+        if dup:
+            return True, f"english-dedup: {detail}"
+    return False, ""
 
 
 def deduplicate(conn: sqlite3.Connection, articles: list) -> list:

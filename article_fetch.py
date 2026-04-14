@@ -2,20 +2,11 @@
 import json
 import logging
 import re
-from html import unescape
 from urllib.parse import urljoin, urlparse
 
 import requests
 
-from config import TELEGRAM_IMAGES_ENABLED, TELEGRAM_IMAGES_STRICT
-
 log = logging.getLogger(__name__)
-
-_BAD_IMAGE_PATH_RE = re.compile(
-    r"(?is)"
-    r"(?:^|/)(?:logo|banner|promo|partners?|sponsors?|advert|adserver|favicon|sprite)(?:[/.\-_?#]|$)|"
-    r"(?:doubleclick|googlesyndication|gstatic\.com/ads|facebook\.com/tr|/1x1|/pixel|utm_|\btracking\b)"
-)
 
 _BAD_DEFAULT_ENCODINGS = frozenset({"iso-8859-1", "windows-1252"})
 
@@ -74,157 +65,6 @@ def _html_text(response: requests.Response) -> str:
         except (UnicodeDecodeError, LookupError):
             continue
     return raw.decode("utf-8", errors="replace")
-
-
-def _strip_www(host: str) -> str:
-    h = (host or "").lower()
-    return h[4:] if h.startswith("www.") else h
-
-
-def _registrable_domain(host: str) -> str:
-    h = _strip_www(host)
-    parts = h.split(".")
-    if len(parts) >= 2:
-        return ".".join(parts[-2:])
-    return h
-
-
-def _image_host_allowed(page_url: str, image_url: str, strict: bool) -> bool:
-    pn = urlparse(page_url).netloc
-    in_ = urlparse(image_url).netloc
-    if not pn or not in_:
-        return False
-    ps, ims = _strip_www(pn), _strip_www(in_)
-    if ps == ims:
-        return True
-    if ims.endswith("." + ps):
-        return True
-    if not strict and _registrable_domain(pn) == _registrable_domain(in_):
-        return True
-    return False
-
-
-def _image_url_passes_safety(abs_url: str, page_url: str, strict: bool) -> bool:
-    u = (abs_url or "").strip()
-    if not u.lower().startswith("https://"):
-        return False
-    p = urlparse(u)
-    if p.scheme.lower() != "https":
-        return False
-    combined = f"{p.path or ''}?{p.query or ''}#{p.fragment or ''}"
-    if _BAD_IMAGE_PATH_RE.search(combined) or _BAD_IMAGE_PATH_RE.search(p.path or ""):
-        return False
-    low = (p.path or "").lower()
-    if low.endswith((".ico", ".svg")):
-        return False
-    return _image_host_allowed(page_url, u, strict)
-
-
-def _resolve_image_url(page_url: str, raw: str) -> str | None:
-    r = unescape((raw or "").strip().strip('"').strip("'"))
-    if not r or r.startswith("data:"):
-        return None
-    try:
-        joined = urljoin(page_url, r)
-    except ValueError:
-        return None
-    if not joined:
-        return None
-    joined = joined.split("#")[0].strip()
-    if not joined.lower().startswith("https://"):
-        return None
-    return joined or None
-
-
-def _meta_image_candidates(html: str) -> list[str]:
-    out: list[str] = []
-    for m in re.finditer(r"<meta\s+[^>]+/?>", html, re.I):
-        tag = m.group(0)
-        prop_m = re.search(r'\bproperty\s*=\s*["\']([^"\']+)["\']', tag, re.I)
-        name_m = re.search(r'\bname\s*=\s*["\']([^"\']+)["\']', tag, re.I)
-        content_m = re.search(r'\bcontent\s*=\s*["\']([^"\']+)["\']', tag, re.I)
-        if not content_m:
-            content_m = re.search(r"\bcontent\s*=\s*([^\s>]+)", tag, re.I)
-        if not content_m:
-            continue
-        key = ""
-        if prop_m:
-            key = prop_m.group(1).strip().lower()
-        elif name_m:
-            key = name_m.group(1).strip().lower()
-        if key in frozenset(
-            {
-                "og:image",
-                "og:image:url",
-                "og:image:secure_url",
-                "twitter:image",
-                "twitter:image:src",
-            }
-        ):
-            out.append(content_m.group(1).strip())
-    return out
-
-
-def _jsonld_article_images(page_html: str) -> list[str]:
-    out: list[str] = []
-
-    def push_im(im) -> None:
-        if isinstance(im, str):
-            out.append(im)
-        elif isinstance(im, dict):
-            u = im.get("url")
-            if isinstance(u, str):
-                out.append(u)
-
-    for m in re.finditer(
-        r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
-        page_html,
-        re.DOTALL | re.IGNORECASE,
-    ):
-        raw = m.group(1).strip()
-        if not raw:
-            continue
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(data, dict):
-            candidates = data.get("@graph", [data])
-        elif isinstance(data, list):
-            candidates = data
-        else:
-            continue
-        for item in candidates:
-            if not isinstance(item, dict):
-                continue
-            t = item.get("@type")
-            types = [t] if isinstance(t, str) else (list(t) if isinstance(t, list) else [])
-            if not any(x in ("NewsArticle", "Article") for x in types):
-                continue
-            im = item.get("image")
-            if isinstance(im, str):
-                push_im(im)
-            elif isinstance(im, list):
-                for x in im:
-                    push_im(x)
-            elif isinstance(im, dict):
-                push_im(im)
-    return out
-
-
-def extract_article_image_url(page_html: str, page_url: str, strict: bool) -> str | None:
-    """Hero image URL from OG / Twitter / JSON-LD Article (no first-<img> fallback)."""
-    if not page_html or not page_url:
-        return None
-    seen: set[str] = set()
-    for raw in _meta_image_candidates(page_html) + _jsonld_article_images(page_html):
-        absu = _resolve_image_url(page_url, raw)
-        if not absu or absu in seen:
-            continue
-        seen.add(absu)
-        if _image_url_passes_safety(absu, page_url, strict):
-            return absu
-    return None
 
 
 def _article_body_from_jsonld(page_html: str) -> str:
@@ -364,8 +204,7 @@ def _article_body_from_dom_wroclaw(stripped_html: str) -> str:
 
 def fetch_article_body(
     session: requests.Session, url: str, timeout: tuple
-) -> tuple[str, str | None, str | None]:
-    """Returns ``(body_text, fetch_error_or_none, image_url_or_none)``."""
+) -> tuple[str, str | None]:
     paywall_signals = [
         "zaloguj się",
         "registrieren",
@@ -404,25 +243,14 @@ def fetch_article_body(
         resp.raise_for_status()
         page_html = _html_text(resp)
 
-        img_url: str | None = None
-        if TELEGRAM_IMAGES_ENABLED:
-            try:
-                img_url = extract_article_image_url(page_html, url, TELEGRAM_IMAGES_STRICT)
-            except Exception as ex:
-                log.warning("extract_article_image_url failed for %s: %s", url, ex)
-
         text = _article_body_from_jsonld(page_html)
         if len(text) >= 200:
             if any(s in text.lower() for s in paywall_signals) and len(text) < 500:
                 log.warning(f"Paywall detected at {url}, ignoring fetched content")
-                return (
-                    "",
-                    "insufficient text (paywall/teaser/login; not enough free content for summary)",
-                    img_url,
-                )
+                return ""
             text = _trim_boilerplate(text)
             log.info(f"Fetched {len(text)} chars (JSON-LD) from {url}")
-            return text, None, img_url
+            return text, None
 
         stripped = re.sub(
             r"<script\b[^>]*>.*?</script>", " ", page_html, flags=re.DOTALL | re.IGNORECASE
@@ -439,14 +267,10 @@ def fetch_article_body(
         if len(text) >= 250:
             if any(s in text.lower() for s in paywall_signals) and len(text) < 500:
                 log.warning(f"Paywall detected at {url}, ignoring fetched content")
-                return (
-                    "",
-                    "insufficient text (paywall/teaser/login; not enough free content for summary)",
-                    img_url,
-                )
+                return "", "insufficient text (paywall/teaser/login; not enough free content for summary)"
             text = _trim_boilerplate(text.strip())
             log.info(f"Fetched {len(text)} chars (DOM) from {url}")
-            return text, None, img_url
+            return text, None
 
         def extract_paragraphs(source):
             paragraphs = re.findall(r"<p[^>]*>(.*?)</p>", source, re.DOTALL)
@@ -468,19 +292,192 @@ def fetch_article_body(
             text = extract_paragraphs(stripped).strip()
         if any(s in text.lower() for s in paywall_signals) and len(text) < 500:
             log.warning(f"Paywall detected at {url}, ignoring fetched content")
-            return (
-                "",
-                "insufficient text (paywall/teaser/login; not enough free content for summary)",
-                img_url,
-            )
+            return "", "insufficient text (paywall/teaser/login; not enough free content for summary)"
         text = _trim_boilerplate(text.strip())
         log.info(f"Fetched {len(text)} chars from {url}")
-        return text, None, img_url
+        return text, None
     except requests.HTTPError as e:
         status = getattr(getattr(e, "response", None), "status_code", None)
         if status == 403:
-            return "", f"fetch blocked (403 Forbidden): {url}", None
-        return "", f"fetch failed (HTTP {status}): {url}", None
+            return "", f"fetch blocked (403 Forbidden): {url}"
+        return "", f"fetch failed (HTTP {status}): {url}"
     except Exception as e:
         log.warning(f"Could not fetch article body from {url}: {e}")
-        return "", f"fetch failed: {url}", None
+        return "", f"fetch failed: {url}"
+
+
+def _norm_host(host: str) -> str:
+    h = (host or "").strip().lower()
+    if h.startswith("www."):
+        h = h[4:]
+    return h
+
+
+def _registrable_domain(host: str) -> str:
+    """
+    Best-effort "registrable" domain without extra deps.
+    For most PL outlets this is good enough (e.g. wiadomosci.wp.pl -> wp.pl).
+    """
+    h = _norm_host(host)
+    parts = [p for p in h.split(".") if p]
+    if len(parts) < 2:
+        return h
+    return ".".join(parts[-2:])
+
+
+def extract_article_image_url(page_html: str, page_url: str, strict: bool = True) -> str | None:
+    """
+    Extract a plausible hero image URL from HTML metadata (no network):
+    - Open Graph: <meta property="og:image" ...>
+    - Twitter:   <meta name="twitter:image" ...>
+    - JSON-LD:   "image": "..." / ["..."] / [{"url":"..."}]
+
+    Safety filters:
+    - https only, reject data URIs
+    - strict host mode: same host as article URL
+    - non-strict: same registrable domain (best-effort)
+    - reject obvious logo/icon/sprite assets
+    """
+    html = page_html or ""
+    base = (page_url or "").strip()
+    if not base:
+        return None
+
+    base_host = _norm_host(urlparse(base).netloc)
+    if not base_host:
+        return None
+
+    def norm_and_filter(raw_url: str | None) -> str | None:
+        u = (raw_url or "").strip()
+        if not u:
+            return None
+        if u.startswith("//"):
+            u = "https:" + u
+        u = urljoin(base, u)
+        p = urlparse(u)
+        if p.scheme.lower() != "https":
+            return None
+        if not p.netloc:
+            return None
+
+        host = _norm_host(p.netloc)
+        if strict:
+            if host != base_host:
+                return None
+        else:
+            if _registrable_domain(host) != _registrable_domain(base_host):
+                return None
+
+        path_l = (p.path or "").lower()
+        if any(k in path_l for k in ("logo", "favicon", "sprite", "icon", "blank")):
+            return None
+        if re.search(r"(?i)\b(logo|favicon|sprite|icon)\b", u):
+            return None
+
+        # Basic extension sanity: allow common image extensions, but also allow
+        # extensionless CDN URLs (some outlets do this). If it looks like a script/css, reject.
+        if re.search(r"(?i)\.(svg|css|js)(?:$|[?#])", u):
+            return None
+        return u
+
+    def meta_content(pattern: str) -> str | None:
+        m = re.search(pattern, html, flags=re.IGNORECASE)
+        if not m:
+            return None
+        return m.group(1).strip()
+
+    # 1) OG image
+    og = meta_content(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']')
+    u = norm_and_filter(og)
+    if u:
+        return u
+
+    # 2) Twitter image
+    tw = meta_content(r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']')
+    u = norm_and_filter(tw)
+    if u:
+        return u
+
+    # 3) JSON-LD
+    for m in re.finditer(
+        r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html,
+        flags=re.DOTALL | re.IGNORECASE,
+    ):
+        raw = (m.group(1) or "").strip()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+
+        candidates: list[dict] = []
+        if isinstance(data, dict):
+            g = data.get("@graph")
+            if isinstance(g, list):
+                candidates = [x for x in g if isinstance(x, dict)]
+            else:
+                candidates = [data]
+        elif isinstance(data, list):
+            candidates = [x for x in data if isinstance(x, dict)]
+
+        for item in candidates:
+            t = item.get("@type")
+            types: list[str] = []
+            if isinstance(t, str):
+                types = [t]
+            elif isinstance(t, list):
+                types = [x for x in t if isinstance(x, str)]
+            if types and not any(x in ("NewsArticle", "Article") for x in types):
+                continue
+
+            img = item.get("image")
+            raw_candidates: list[str] = []
+            if isinstance(img, str):
+                raw_candidates = [img]
+            elif isinstance(img, list):
+                for x in img:
+                    if isinstance(x, str):
+                        raw_candidates.append(x)
+                    elif isinstance(x, dict):
+                        u0 = x.get("url")
+                        if isinstance(u0, str):
+                            raw_candidates.append(u0)
+            elif isinstance(img, dict):
+                u0 = img.get("url")
+                if isinstance(u0, str):
+                    raw_candidates = [u0]
+
+            for ru in raw_candidates:
+                u = norm_and_filter(ru)
+                if u:
+                    return u
+
+    return None
+
+
+def fetch_article_image_url(
+    session: requests.Session, url: str, timeout: tuple, strict: bool = True
+) -> str | None:
+    """
+    Fetch article HTML and extract a hero image URL. Returns None on failure.
+    Kept separate from fetch_article_body to avoid changing summarization behavior.
+    """
+    try:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
+        }
+        resp = session.get(url, timeout=timeout, headers=headers)
+        resp.raise_for_status()
+        page_html = _html_text(resp)
+        return extract_article_image_url(page_html, url, strict=strict)
+    except Exception as e:
+        log.info("No image extracted for %s (%s)", url, e)
+        return None
