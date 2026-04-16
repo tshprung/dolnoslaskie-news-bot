@@ -74,6 +74,65 @@ def _sanitize_english_summary_line(result: str) -> str:
     """Decode HTML entities; strip control chars; keep punctuation and diacritics."""
     return _SANITIZE_EN_LINE.sub("", html.unescape(result)).strip()
 
+
+_POLISH_PROSE_MARKERS = re.compile(
+    r"(?is)"
+    r"\b("
+    r"b[eę]dzie|bedzie|"
+    r"gdzie|"
+    r"om[oó]wi|omowi|"
+    r"kwesti[eę]|kwestie|"
+    r"zwierz[aą]t|zwierzat|"
+    r"miast(?:ach|a|em|ami)?|"
+    r"radny|radna|"
+    r"go[sś]ciem|gosciem|"
+    r"naj[sś]wie|najswie|"
+    r"wiadomo[sś]ci|wiadomosci"
+    r")\b"
+)
+
+
+def _looks_like_polish_prose(s: str) -> bool:
+    """
+    Heuristic: catch cases where Stage 2 ignores the English-only instruction.
+    Tuned to avoid false positives on English that only contains Polish placenames.
+    """
+    t = (s or "").strip()
+    if not t:
+        return False
+    if _POLISH_PROSE_MARKERS.search(t):
+        return True
+    # Strong signal: multiple Polish-specific letters outside all-caps tokens (often names).
+    diac = set(re.findall(r"[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]", t))
+    if len(diac) >= 3:
+        return True
+    return False
+
+
+def _rewrite_summary_to_english(client: OpenAI, polish_line: str) -> str:
+    """One-shot repair when Stage 2 returns Polish prose."""
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        max_tokens=220,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You rewrite Polish news blurbs into clear factual English for Telegram. "
+                    "Output ONLY 1-2 sentences. "
+                    "Keep Polish placenames in Latin as in the source (Wrocław, Dolnośląskie). "
+                    "Do not prefix with labels. Do not output SKIP/INSUFFICIENT."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Polish blurb:\n{polish_line.strip()}\n\nRewrite in English:",
+            },
+        ],
+    )
+    return (response.choices[0].message.content or "").strip()
+
+
 _LEADING_LABEL_PATTERNS = (
     r"^english\s*:\s*",
     r"^english\s*-\s*",
@@ -322,6 +381,22 @@ def summarize_in_english(
     result = _sanitize_english_summary_line(result)
     if not result:
         return None, "sanitization left empty result"
+
+    if _looks_like_polish_prose(result):
+        log.warning("Stage 2 returned Polish prose — running English rewrite pass")
+        try:
+            fixed = _rewrite_summary_to_english(client, result)
+        except Exception as e:
+            return None, f"model returned Polish summary; rewrite failed ({e})"
+        fixed = strip_leading_summary_labels(fixed)
+        fixed = _sanitize_english_summary_line(fixed)
+        if not fixed:
+            return None, "model returned Polish summary; rewrite produced empty text"
+        if fixed.upper().startswith("SKIP") or fixed.upper().startswith("INSUF"):
+            return None, "model returned Polish summary; rewrite returned control token"
+        if _looks_like_polish_prose(fixed):
+            return None, "model returned Polish summary; rewrite still not English"
+        result = fixed
 
     word_count = len(result.split())
     if word_count > MAX_SUMMARY_WORDS_HARD:

@@ -119,6 +119,32 @@ def test_stage2_wordcount_label_echo_retries(monkeypatch):
     assert client.chat.completions.create.call_count == 3
 
 
+def test_stage2_polish_output_triggers_english_rewrite(monkeypatch):
+    body = (
+        "Radny Robert Maślak, specjalista od ochrony przyrody, będzie gościem Radia Wrocław, "
+        "gdzie omówi kwestie dzikich zwierząt w miastach."
+    )
+    monkeypatch.setattr("summarize.fetch_article_body", lambda *_a, **_k: (body, None))
+    article = {
+        "link": "https://www.radiowroclaw.pl/articles/view/159826",
+        "title": "Gość Radia Wrocław",
+        "summary": "",
+    }
+    pl = (
+        "Radny Robert Maślak, specjalista od ochrony przyrody, będzie gościem Radia Wrocław, "
+        "gdzie omówi kwestie dzikich zwierząt w miastach."
+    )
+    en = (
+        "Wrocław councillor and nature-protection specialist Robert Maślak will be a guest on Radio Wrocław "
+        "to discuss wild animals in cities."
+    )
+    client = _client_with_responses("GO", pl, en)
+    out, reason = summarize_in_english(client, MagicMock(), (1, 2), article)
+    assert reason is None
+    assert out and "radio" in out.lower()
+    assert client.chat.completions.create.call_count == 3
+
+
 def test_berlin_geo_mismatch(monkeypatch):
     body = (
         "Großbrand am Brandenburger Tor in Berlin; Feuerwehr im Einsatz. "
