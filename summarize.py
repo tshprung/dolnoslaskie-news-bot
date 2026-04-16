@@ -112,7 +112,7 @@ def _looks_like_polish_prose(s: str) -> bool:
 def _rewrite_summary_to_english(client: OpenAI, polish_line: str) -> str:
     """One-shot repair when Stage 2 returns Polish prose."""
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         max_tokens=220,
         messages=[
             {
