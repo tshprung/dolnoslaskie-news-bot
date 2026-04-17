@@ -133,6 +133,15 @@ def _rewrite_summary_to_english(client: OpenAI, polish_line: str) -> str:
     return (response.choices[0].message.content or "").strip()
 
 
+_ENGLISH_ONLY_STAGE2_NOTE = (
+    "Your last reply was Polish, not English. "
+    "Rewrite as 1-2 factual English sentences for Telegram readers. "
+    "Latin script only; keep Polish placenames as in the source (Wrocław, Dolnośląskie, Brochów). "
+    "Do not copy Polish phrasing from the article. "
+    "Do not output SKIP/INSUFFICIENT."
+)
+
+
 _LEADING_LABEL_PATTERNS = (
     r"^english\s*:\s*",
     r"^english\s*-\s*",
@@ -383,19 +392,42 @@ def summarize_in_english(
         return None, "sanitization left empty result"
 
     if _looks_like_polish_prose(result):
-        log.warning("Stage 2 returned Polish prose — running English rewrite pass")
+        # Same pattern as Polish_News Hebrew bot: retry Stage 2 with an explicit language-only instruction
+        # before falling back to a standalone rewrite call.
+        log.warning("Stage 2 returned Polish prose — retrying Stage 2 with English-only instruction")
+        _TEL.stage2_retries += 1
+        response = call_stage2(f"Article: {text[:stage2_limit]}\n\n{_ENGLISH_ONLY_STAGE2_NOTE}")
+        finish = response.choices[0].finish_reason
+        if finish == "content_filter":
+            return None, "language guard: blocked by content policy (content_filter)"
+        if finish == "length":
+            return None, "language guard: response truncated"
+        result = (response.choices[0].message.content or "").strip()
+        if result.upper().startswith("SKIP"):
+            return None, None
+        if result.upper().startswith("INSUF"):
+            if not body_available:
+                return None, _SKIPPED_NO_BODY
+            return None, _SKIPPED_PAYWALL_TEASER
+        result = strip_leading_summary_labels(result)
+        result = _sanitize_english_summary_line(result)
+        if not result:
+            return None, "language guard: sanitization left empty result after English-only retry"
+
+    if _looks_like_polish_prose(result):
+        log.warning("Stage 2 still Polish after English-only retry — running standalone rewrite pass")
         try:
             fixed = _rewrite_summary_to_english(client, result)
         except Exception as e:
-            return None, f"model returned Polish summary; rewrite failed ({e})"
+            return None, f"language guard: rewrite failed ({e})"
         fixed = strip_leading_summary_labels(fixed)
         fixed = _sanitize_english_summary_line(fixed)
         if not fixed:
-            return None, "model returned Polish summary; rewrite produced empty text"
+            return None, "language guard: rewrite produced empty text"
         if fixed.upper().startswith("SKIP") or fixed.upper().startswith("INSUF"):
-            return None, "model returned Polish summary; rewrite returned control token"
+            return None, "language guard: rewrite returned control token"
         if _looks_like_polish_prose(fixed):
-            return None, "model returned Polish summary; rewrite still not English"
+            return None, "language guard: rewrite still not English"
         result = fixed
 
     word_count = len(result.split())

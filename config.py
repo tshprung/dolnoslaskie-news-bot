@@ -357,7 +357,7 @@ CLASSIFY_PROMPT = (
 )
 
 # Admin Telegram: skip noisy expected skips (same idea as Polish channel).
-SKIP_NOTIFY_EXEMPT_PREFIXES = ("rss teaser:",)
+SKIP_NOTIFY_EXEMPT_PREFIXES = ("rss teaser:", "language guard:")
 
 def skip_admin_notify_for_reason(reason: str | None) -> bool:
     if not reason:
