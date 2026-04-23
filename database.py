@@ -19,6 +19,8 @@ from config import (
     SCRAPE_SOURCES_JITTER_MIN_SEC,
     SCRAPE_SOURCES_MAX_NEW_URLS,
     SCRAPE_SOURCES_MIN_INTERVAL_SEC,
+    should_skip_wroclaw_go_event_url,
+    wroclaw_go_event_skip_reason,
 )
 from scrape_sources import (
     article_html_fetch_published_utc,
@@ -263,6 +265,19 @@ def get_new_articles(conn, session=None, timeout: tuple | None = None):
                 if exists or url_done or url_norm in urls_in_batch:
                     continue
                 urls_in_batch.add(url_norm)
+
+                if should_skip_wroclaw_go_event_url(link):
+                    log.info(
+                        "Skipping RSS item (%s): %s",
+                        wroclaw_go_event_skip_reason(),
+                        url_norm,
+                    )
+                    conn.execute(
+                        "INSERT OR IGNORE INTO seen_articles (id) VALUES (?)", (article_id,)
+                    )
+                    record_seen_url(conn, url_norm)
+                    continue
+
                 published = entry.get("published_parsed")
                 if published:
                     dt = datetime(*published[:6], tzinfo=timezone.utc)

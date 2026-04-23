@@ -123,6 +123,21 @@ AGGREGATOR_URL_SKIP = re.compile(
     re.IGNORECASE,
 )
 
+# wroclaw.pl "GO" event pages (calendar listings) — not news articles for this channel.
+WROCLAW_GO_EVENTS_URL_SKIP = re.compile(
+    r"(?i)https?://(?:www\.)?wroclaw\.pl/go/wydarzenia/(?:teatr|kino|koncert|koncerty|festiwal|festiwale|opera|filharmonia)(?:/|$|[?#])"
+)
+
+
+def should_skip_wroclaw_go_event_url(url: str | None) -> bool:
+    if not url or not isinstance(url, str):
+        return False
+    return bool(WROCLAW_GO_EVENTS_URL_SKIP.search(url.strip()))
+
+
+def wroclaw_go_event_skip_reason() -> str:
+    return "wroclaw.pl GO event listing (not a news article)"
+
 # DIE ZEIT: print issues /year/issue/… (usually ZEIT+) and year hub zeit.de/2026 (Jahrgang index).
 # Must not match /news/2026-04/… (date slug is not the print volume path).
 ZEIT_ARCHIVE_SKIP_URL = re.compile(

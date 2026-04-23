@@ -16,8 +16,10 @@ from config import (
     radio_wroc_ticker_skip_reason,
     should_skip_radio_wroc_ticker_title,
     should_skip_sponsored,
+    should_skip_wroclaw_go_event_url,
     sponsored_skip_reason,
     skip_admin_notify_for_article,
+    wroclaw_go_event_skip_reason,
 )
 from database import get_new_articles, init_db, record_seen_url
 from dedup import deduplicate, is_english_near_duplicate, record_sent_en_snapshot, record_sent_snapshot
@@ -57,6 +59,10 @@ def main():
         try:
             if AGGREGATOR_URL_SKIP.search(article["link"]):
                 log.info(f"Skipped (ticker/aggregator URL): {article['title'][:70]}")
+                _mark_article_done(conn, article)
+                continue
+            if should_skip_wroclaw_go_event_url(article.get("link")):
+                log.info(f"Skipped ({wroclaw_go_event_skip_reason()}): {article['title'][:70]}")
                 _mark_article_done(conn, article)
                 continue
             if LISTICLE_TITLE_SKIP.search(article["title"] or ""):
