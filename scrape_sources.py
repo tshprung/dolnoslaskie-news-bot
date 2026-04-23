@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse, urlunparse
 
 import requests
@@ -39,6 +41,106 @@ def fetch_listing_html(session: requests.Session, url: str, timeout: tuple) -> s
     resp = session.get(url, timeout=timeout, headers=headers)
     resp.raise_for_status()
     return resp.text or ""
+
+
+def _parse_iso_datetime_to_utc(value: str) -> datetime | None:
+    s = (value or "").strip()
+    if not s:
+        return None
+    # feedparser-style / HTML datetime often ends with Z
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def echo24_extract_published_utc_from_html(page_html: str) -> datetime | None:
+    """
+    Best-effort publish time for echo24 articles.
+    Prefer OpenGraph article:published_time; fall back to JSON-LD datePublished.
+    """
+    html = page_html or ""
+    if not html.strip():
+        return None
+
+    # OpenGraph / article meta
+    for pat in (
+        r'<meta[^>]+property=["\']article:published_time["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']article:published_time["\']',
+        r'<meta[^>]+property=["\']og:updated_time["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:updated_time["\']',
+    ):
+        m = re.search(pat, html, flags=re.IGNORECASE)
+        if m:
+            dt = _parse_iso_datetime_to_utc(m.group(1))
+            if dt:
+                return dt
+
+    # JSON-LD
+    for m in re.finditer(
+        r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html,
+        flags=re.DOTALL | re.IGNORECASE,
+    ):
+        raw = (m.group(1) or "").strip()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+
+        candidates = []
+        if isinstance(data, dict):
+            g = data.get("@graph")
+            if isinstance(g, list):
+                candidates = [x for x in g if isinstance(x, dict)]
+            else:
+                candidates = [data]
+        elif isinstance(data, list):
+            candidates = [x for x in data if isinstance(x, dict)]
+
+        best: datetime | None = None
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            t = item.get("@type")
+            types = [t] if isinstance(t, str) else ([x for x in t if isinstance(x, str)] if isinstance(t, list) else [])
+            if types and not any(x in ("NewsArticle", "Article") for x in types):
+                continue
+            dp = item.get("datePublished") or item.get("dateModified")
+            if isinstance(dp, str):
+                dt = _parse_iso_datetime_to_utc(dp)
+                if dt and (best is None or dt < best):
+                    best = dt
+        if best:
+            return best
+
+    return None
+
+
+def echo24_fetch_published_utc(session: requests.Session, url: str, timeout: tuple) -> datetime | None:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
+    }
+    try:
+        resp = session.get(url, timeout=timeout, headers=headers)
+        resp.raise_for_status()
+        return echo24_extract_published_utc_from_html(resp.text or "")
+    except Exception as e:
+        log.info("echo24: could not fetch/parse publish time for %s (%s)", url, e)
+        return None
 
 
 @dataclass(frozen=True)

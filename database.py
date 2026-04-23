@@ -21,6 +21,7 @@ from config import (
     SCRAPE_SOURCES_MIN_INTERVAL_SEC,
 )
 from scrape_sources import (
+    echo24_fetch_published_utc,
     extract_24wroclaw_items,
     extract_echo24_items,
     fetch_listing_html,
@@ -158,6 +159,7 @@ def _scrape_listing_sources(
         return []
 
     scraped: list[dict] = []
+    min_dt = now_utc - timedelta(hours=int(MAX_ARTICLE_AGE_HOURS))
     for i, src in enumerate(SCRAPE_SOURCES or []):
         key = (src or {}).get("key")
         list_url = (src or {}).get("list_url")
@@ -184,6 +186,24 @@ def _scrape_listing_sources(
                 if url_done:
                     continue
                 urls_in_batch.add(url_norm)
+
+                published_utc = None
+                if key == "echo24":
+                    published_utc = echo24_fetch_published_utc(session, link, timeout)
+                    if published_utc is None or published_utc < min_dt:
+                        log.info(
+                            "Skipping stale scraped item (%s): %s (published=%s, min=%s)",
+                            key,
+                            url_norm,
+                            published_utc.isoformat() if published_utc else None,
+                            min_dt.isoformat(),
+                        )
+                        record_seen_url(conn, url_norm)
+                        conn.commit()
+                        continue
+
+                sort_key = published_utc if (key == "echo24" and published_utc) else now_utc
+                date_str = sort_key.astimezone(ZoneInfo(DISPLAY_TZ)).strftime("%d.%m.%Y %H:%M")
                 scraped.append(
                     {
                         "id": link,
@@ -192,8 +212,8 @@ def _scrape_listing_sources(
                         "title": it.title or "",
                         "summary": "",
                         "source": key,
-                        "date": now_utc.astimezone(ZoneInfo(DISPLAY_TZ)).strftime("%d.%m.%Y %H:%M"),
-                        "sort_key": now_utc,
+                        "date": date_str,
+                        "sort_key": sort_key,
                     }
                 )
                 if len(scraped) >= int(SCRAPE_SOURCES_MAX_NEW_URLS):
