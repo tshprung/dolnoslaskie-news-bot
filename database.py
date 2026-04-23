@@ -21,6 +21,7 @@ from config import (
     SCRAPE_SOURCES_MIN_INTERVAL_SEC,
 )
 from scrape_sources import (
+    article_html_fetch_published_utc,
     echo24_fetch_published_utc,
     extract_24wroclaw_items,
     extract_echo24_items,
@@ -267,6 +268,27 @@ def get_new_articles(conn, session=None, timeout: tuple | None = None):
                     dt = datetime(*published[:6], tzinfo=timezone.utc)
                 else:
                     dt = now_utc
+
+                # Some Polish outlets bump RSS <pubDate> on edits even when the story is old.
+                # For 24wroclaw.pl, verify the on-page first-publish timestamp before ingesting.
+                host = urlparse(link).netloc.lower()
+                if host.endswith("24wroclaw.pl") and session is not None and timeout is not None:
+                    canon = article_html_fetch_published_utc(session, link, timeout)
+                    if canon is None or canon < min_dt:
+                        log.info(
+                            "Skipping RSS item (canonical publish too old/unreadable): %s (rss=%s canon=%s min=%s)",
+                            url_norm,
+                            dt.isoformat(),
+                            canon.isoformat() if canon else None,
+                            min_dt.isoformat(),
+                        )
+                        conn.execute(
+                            "INSERT OR IGNORE INTO seen_articles (id) VALUES (?)", (article_id,)
+                        )
+                        record_seen_url(conn, url_norm)
+                        continue
+                    dt = canon
+
                 if dt < min_dt:
                     # Prevent old items from resurfacing on every run.
                     conn.execute(

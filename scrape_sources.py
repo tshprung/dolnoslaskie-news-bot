@@ -59,21 +59,22 @@ def _parse_iso_datetime_to_utc(value: str) -> datetime | None:
     return dt.astimezone(timezone.utc)
 
 
-def echo24_extract_published_utc_from_html(page_html: str) -> datetime | None:
+def html_extract_first_publish_utc_from_html(page_html: str) -> datetime | None:
     """
-    Best-effort publish time for echo24 articles.
-    Prefer OpenGraph article:published_time; fall back to JSON-LD datePublished.
+    Best-effort *first publish* time from article HTML.
+
+    Prefer `article:published_time` and JSON-LD `datePublished`.
+    Optionally fall back to `og:updated_time` / `dateModified` only if nothing else exists
+    (some sites omit published_time entirely).
     """
     html = page_html or ""
     if not html.strip():
         return None
 
-    # OpenGraph / article meta
+    # OpenGraph / article meta (published first)
     for pat in (
         r'<meta[^>]+property=["\']article:published_time["\'][^>]+content=["\']([^"\']+)["\']',
         r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']article:published_time["\']',
-        r'<meta[^>]+property=["\']og:updated_time["\'][^>]+content=["\']([^"\']+)["\']',
-        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:updated_time["\']',
     ):
         m = re.search(pat, html, flags=re.IGNORECASE)
         if m:
@@ -81,7 +82,7 @@ def echo24_extract_published_utc_from_html(page_html: str) -> datetime | None:
             if dt:
                 return dt
 
-    # JSON-LD
+    # JSON-LD (prefer datePublished; only use dateModified if no datePublished exists)
     for m in re.finditer(
         r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
         html,
@@ -105,23 +106,47 @@ def echo24_extract_published_utc_from_html(page_html: str) -> datetime | None:
         elif isinstance(data, list):
             candidates = [x for x in data if isinstance(x, dict)]
 
-        best: datetime | None = None
+        best_pub: datetime | None = None
+        best_any: datetime | None = None
         for item in candidates:
             if not isinstance(item, dict):
                 continue
             t = item.get("@type")
             types = [t] if isinstance(t, str) else ([x for x in t if isinstance(x, str)] if isinstance(t, list) else [])
-            if types and not any(x in ("NewsArticle", "Article") for x in types):
+            if types and not any(x in ("NewsArticle", "Article", "WebPage") for x in types):
                 continue
-            dp = item.get("datePublished") or item.get("dateModified")
+            dp = item.get("datePublished")
             if isinstance(dp, str):
                 dt = _parse_iso_datetime_to_utc(dp)
-                if dt and (best is None or dt < best):
-                    best = dt
-        if best:
-            return best
+                if dt and (best_pub is None or dt < best_pub):
+                    best_pub = dt
+            dm = item.get("dateModified")
+            if isinstance(dm, str):
+                dt = _parse_iso_datetime_to_utc(dm)
+                if dt and (best_any is None or dt < best_any):
+                    best_any = dt
+        if best_pub:
+            return best_pub
+        if best_any:
+            return best_any
+
+    # Last-resort meta fallbacks
+    for pat in (
+        r'<meta[^>]+property=["\']og:updated_time["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:updated_time["\']',
+    ):
+        m = re.search(pat, html, flags=re.IGNORECASE)
+        if m:
+            dt = _parse_iso_datetime_to_utc(m.group(1))
+            if dt:
+                return dt
 
     return None
+
+
+def echo24_extract_published_utc_from_html(page_html: str) -> datetime | None:
+    """Back-compat alias (echo24 uses the same HTML signals as most outlets)."""
+    return html_extract_first_publish_utc_from_html(page_html)
 
 
 def echo24_fetch_published_utc(session: requests.Session, url: str, timeout: tuple) -> datetime | None:
@@ -137,9 +162,29 @@ def echo24_fetch_published_utc(session: requests.Session, url: str, timeout: tup
     try:
         resp = session.get(url, timeout=timeout, headers=headers)
         resp.raise_for_status()
-        return echo24_extract_published_utc_from_html(resp.text or "")
+        return html_extract_first_publish_utc_from_html(resp.text or "")
     except Exception as e:
         log.info("echo24: could not fetch/parse publish time for %s (%s)", url, e)
+        return None
+
+
+def article_html_fetch_published_utc(session: requests.Session, url: str, timeout: tuple) -> datetime | None:
+    """Fetch arbitrary article HTML and extract a best-effort first-publish timestamp."""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
+    }
+    try:
+        resp = session.get(url, timeout=timeout, headers=headers)
+        resp.raise_for_status()
+        return html_extract_first_publish_utc_from_html(resp.text or "")
+    except Exception as e:
+        log.info("article html: could not fetch/parse publish time for %s (%s)", url, e)
         return None
 
 
