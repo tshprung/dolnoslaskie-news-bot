@@ -38,3 +38,33 @@ def test_extract_echo24_items_accepts_absolute_href():
     assert len(items) == 1
     assert items[0].url == "https://echo24.tv/pl/11_wiadomosci/94224_wielka-budowa-w-sercu-wroclawia.html"
 
+
+def test_extract_echo24_drops_old_digest_links_under_wypadki():
+    html = """
+    <html><body>
+      <a href="/pl/11_wiadomosci/94686_wroclawskie-kamienice.html">Wrocławskie kamienice nie do poznania</a>
+      <h2>Wypadki – Dolny Śląsk</h2>
+      <a href="/pl/11_wiadomosci/90501_stary-wypadek.html">Informacja o porwaniu i pościg</a>
+      <a href="/pl/11_wiadomosci/90059_inny-stary-wypadek.html">Po śmiertelnym wypadku utrudnienia</a>
+    </body></html>
+    """
+    items = extract_echo24_items(html, base_url="https://echo24.tv/")
+    urls = [it.url for it in items]
+    assert "https://echo24.tv/pl/11_wiadomosci/94686_wroclawskie-kamienice.html" in urls
+    assert "https://echo24.tv/pl/11_wiadomosci/90501_stary-wypadek.html" not in urls
+    assert "https://echo24.tv/pl/11_wiadomosci/90059_inny-stary-wypadek.html" not in urls
+
+
+def test_extract_echo24_allows_fresh_post_section_item():
+    html = """
+    <html><body>
+      <a href="/pl/11_wiadomosci/94610_aktualnosc.html">Świeży lead</a>
+      <h2>Wypadki – Dolny Śląsk</h2>
+      <a href="/pl/11_wiadomosci/94590_blisko-wypadku.html">Świeży wypadek w sekcji digest</a>
+    </body></html>
+    """
+    items = extract_echo24_items(html, base_url="https://echo24.tv/")
+    urls = [it.url for it in items]
+    assert "https://echo24.tv/pl/11_wiadomosci/94610_aktualnosc.html" in urls
+    assert "https://echo24.tv/pl/11_wiadomosci/94590_blisko-wypadku.html" in urls
+
