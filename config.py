@@ -25,6 +25,8 @@ FEEDS = [
     "https://gazetawroclawska.pl/rss",
     # Lower Silesia (Dolnośląskie) regional admin/government beat
     "https://portalsamorzadowy.pl/rss/dolnoslaskie.xml",
+    # DolnySlask.pl — voivodeship section (WordPress category feed)
+    "https://dolnyslask.pl/kategoria/z-dolnego-slaska/feed/",
 ]
 
 # Non-RSS sources (hourly scrape of listing pages).
@@ -36,6 +38,10 @@ SCRAPE_SOURCES = [
     {
         "key": "echo24",
         "list_url": "https://echo24.tv/",
+    },
+    {
+        "key": "walbrzych24",
+        "list_url": "https://www.walbrzych24.com/",
     },
 ]
 # Gate scraping so RSS can run more often without extra traffic.
@@ -123,7 +129,6 @@ AGGREGATOR_URL_SKIP = re.compile(
     re.IGNORECASE,
 )
 
-# wroclaw.pl "GO" event pages (calendar listings) — not news articles for this channel.
 WROCLAW_GO_EVENTS_URL_SKIP = re.compile(
     r"(?i)https?://(?:www\.)?wroclaw\.pl/go/wydarzenia/(?:teatr|kino|koncert|koncerty|festiwal|festiwale|opera|filharmonia)(?:/|$|[?#])"
 )

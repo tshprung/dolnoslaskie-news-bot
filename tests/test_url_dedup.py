@@ -54,6 +54,10 @@ def test_record_seen_url_blocks_second_id_same_link(monkeypatch):
         "CREATE TABLE seen_article_urls (url_norm TEXT PRIMARY KEY, "
         "seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
     )
+    conn.execute(
+        "CREATE TABLE age_skipped_urls (url_norm TEXT PRIMARY KEY, "
+        "skipped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+    )
 
     first = get_new_articles(conn)
     assert len(first) == 1

@@ -15,6 +15,7 @@ def _conn():
     c = sqlite3.connect(":memory:")
     c.execute("CREATE TABLE seen_articles (id TEXT PRIMARY KEY, sent_at TEXT)")
     c.execute("CREATE TABLE seen_article_urls (url_norm TEXT PRIMARY KEY, seen_at TEXT)")
+    c.execute("CREATE TABLE age_skipped_urls (url_norm TEXT PRIMARY KEY, skipped_at TEXT)")
     return c
 
 

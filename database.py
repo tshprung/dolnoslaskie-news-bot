@@ -19,21 +19,76 @@ from config import (
     SCRAPE_SOURCES_JITTER_MIN_SEC,
     SCRAPE_SOURCES_MAX_NEW_URLS,
     SCRAPE_SOURCES_MIN_INTERVAL_SEC,
-    should_skip_wroclaw_go_event_url,
-    wroclaw_go_event_skip_reason,
 )
 from scrape_sources import (
-    article_html_fetch_published_utc,
-    echo24_fetch_published_utc,
+    echo24_extract_published_utc_from_html,
     extract_24wroclaw_items,
     extract_echo24_items,
+    extract_walbrzych24_items,
     fetch_listing_html,
+    html_extract_first_publish_utc_from_html,
+    rss_entry_published_utc,
 )
 
 log = logging.getLogger(__name__)
 
 _DEDUP_RECENT_TTL_SEC = 48 * 3600
 _SUMMARY_MAX_CHARS = 5000
+# Stale RSS items stay in feed for months; remember age-skips longer than seen_* churn.
+_AGE_SKIPPED_URL_TTL_DAYS = 365
+
+_HTML_PUBLISH_NETLOCS = frozenset(
+    {
+        "24wroclaw.pl",
+        "portalsamorzadowy.pl",
+    }
+)
+
+
+def _netloc_no_www(url: str) -> str:
+    p = urlparse((url or "").strip())
+    netloc = (p.netloc or "").lower()
+    if netloc.startswith("www."):
+        netloc = netloc[4:]
+    return netloc
+
+
+def article_html_fetch_published_utc(session, url: str, timeout: tuple) -> datetime | None:
+    try:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
+        }
+        resp = session.get(url, timeout=timeout, headers=headers)
+        resp.raise_for_status()
+        html = resp.text or ""
+        return html_extract_first_publish_utc_from_html(html)
+    except Exception:
+        return None
+
+
+def echo24_fetch_published_utc(session, url: str, timeout: tuple) -> datetime | None:
+    try:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
+        }
+        resp = session.get(url, timeout=timeout, headers=headers)
+        resp.raise_for_status()
+        html = resp.text or ""
+        return echo24_extract_published_utc_from_html(html)
+    except Exception:
+        return None
 
 
 def _entry_text_excerpt(entry) -> str:
@@ -106,12 +161,21 @@ def init_db():
         "seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
     )
     conn.execute(
+        "CREATE TABLE IF NOT EXISTS age_skipped_urls ("
+        "url_norm TEXT PRIMARY KEY, "
+        "skipped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+    )
+    conn.execute(
         "CREATE TABLE IF NOT EXISTS bot_kv ("
         "k TEXT PRIMARY KEY, "
         "v TEXT NOT NULL)"
     )
     conn.execute("DELETE FROM seen_articles WHERE sent_at < datetime('now', '-7 days')")
     conn.execute("DELETE FROM seen_article_urls WHERE seen_at < datetime('now', '-7 days')")
+    conn.execute(
+        "DELETE FROM age_skipped_urls WHERE skipped_at < datetime('now', ?)",
+        (f"-{_AGE_SKIPPED_URL_TTL_DAYS} days",),
+    )
     cutoff = int(time.time()) - _DEDUP_RECENT_TTL_SEC
     conn.execute("DELETE FROM dedup_recent WHERE sort_epoch < ?", (cutoff,))
     conn.execute("DELETE FROM dedup_recent_en WHERE sort_epoch < ?", (cutoff,))
@@ -141,6 +205,48 @@ def record_seen_url(conn: sqlite3.Connection, url_norm: str) -> None:
     )
 
 
+def is_age_skipped_url(conn: sqlite3.Connection, url_norm: str) -> bool:
+    if not url_norm:
+        return False
+    row = conn.execute(
+        "SELECT 1 FROM age_skipped_urls WHERE url_norm = ?", (url_norm,)
+    ).fetchone()
+    return row is not None
+
+
+def record_age_skipped_url(conn: sqlite3.Connection, url_norm: str) -> None:
+    if not url_norm:
+        return
+    conn.execute(
+        "INSERT OR IGNORE INTO age_skipped_urls (url_norm) VALUES (?)",
+        (url_norm,),
+    )
+
+
+def _mark_stale_rss_item(conn: sqlite3.Connection, article_id: str, url_norm: str) -> None:
+    conn.execute("INSERT OR IGNORE INTO seen_articles (id) VALUES (?)", (article_id,))
+    record_seen_url(conn, url_norm)
+    record_age_skipped_url(conn, url_norm)
+
+
+def _resolve_rss_entry_publish_utc(
+    entry,
+    link: str,
+    session,
+    timeout: tuple | None,
+) -> datetime | None:
+    rss_dt = rss_entry_published_utc(entry)
+    canon_dt: datetime | None = None
+    if session is not None and timeout is not None:
+        if _netloc_no_www(link) in _HTML_PUBLISH_NETLOCS:
+            canon_dt = article_html_fetch_published_utc(session, link, timeout)
+    if canon_dt is not None and rss_dt is not None:
+        return min(canon_dt, rss_dt)
+    if canon_dt is not None:
+        return canon_dt
+    return rss_dt
+
+
 def _scrape_listing_sources(
     conn: sqlite3.Connection,
     session,
@@ -161,8 +267,8 @@ def _scrape_listing_sources(
     if now_epoch - last_epoch < int(SCRAPE_SOURCES_MIN_INTERVAL_SEC):
         return []
 
-    scraped: list[dict] = []
     min_dt = now_utc - timedelta(hours=int(MAX_ARTICLE_AGE_HOURS))
+    scraped: list[dict] = []
     for i, src in enumerate(SCRAPE_SOURCES or []):
         key = (src or {}).get("key")
         list_url = (src or {}).get("list_url")
@@ -174,6 +280,8 @@ def _scrape_listing_sources(
                 items = extract_24wroclaw_items(html, base_url=list_url)
             elif key == "echo24":
                 items = extract_echo24_items(html, base_url=list_url)
+            elif key == "walbrzych24":
+                items = extract_walbrzych24_items(html, base_url=list_url)
             else:
                 items = []
             for it in items:
@@ -186,27 +294,26 @@ def _scrape_listing_sources(
                 url_done = conn.execute(
                     "SELECT 1 FROM seen_article_urls WHERE url_norm = ?", (url_norm,)
                 ).fetchone()
-                if url_done:
+                id_done = conn.execute(
+                    "SELECT 1 FROM seen_articles WHERE id = ?", (link,)
+                ).fetchone()
+                if id_done or url_done or is_age_skipped_url(conn, url_norm):
                     continue
                 urls_in_batch.add(url_norm)
-
-                published_utc = None
+                pub_utc: datetime | None = None
                 if key == "echo24":
-                    published_utc = echo24_fetch_published_utc(session, link, timeout)
-                    if published_utc is None or published_utc < min_dt:
-                        log.info(
-                            "Skipping stale scraped item (%s): %s (published=%s, min=%s)",
-                            key,
-                            url_norm,
-                            published_utc.isoformat() if published_utc else None,
-                            min_dt.isoformat(),
-                        )
-                        record_seen_url(conn, url_norm)
-                        conn.commit()
-                        continue
-
-                sort_key = published_utc if (key == "echo24" and published_utc) else now_utc
-                date_str = sort_key.astimezone(ZoneInfo(DISPLAY_TZ)).strftime("%d.%m.%Y %H:%M")
+                    pub_utc = echo24_fetch_published_utc(session, link, timeout)
+                else:
+                    pub_utc = article_html_fetch_published_utc(session, link, timeout)
+                if pub_utc is None:
+                    log.warning("Scrape source %s: no publish date for %s; skipping", key, link)
+                    _mark_stale_rss_item(conn, link, url_norm)
+                    continue
+                if pub_utc < min_dt:
+                    _mark_stale_rss_item(conn, link, url_norm)
+                    continue
+                dt = pub_utc
+                dt_local = dt.astimezone(ZoneInfo(DISPLAY_TZ))
                 scraped.append(
                     {
                         "id": link,
@@ -215,8 +322,8 @@ def _scrape_listing_sources(
                         "title": it.title or "",
                         "summary": "",
                         "source": key,
-                        "date": date_str,
-                        "sort_key": sort_key,
+                        "date": dt_local.strftime("%d.%m.%Y %H:%M"),
+                        "sort_key": dt,
                     }
                 )
                 if len(scraped) >= int(SCRAPE_SOURCES_MAX_NEW_URLS):
@@ -262,54 +369,21 @@ def get_new_articles(conn, session=None, timeout: tuple | None = None):
                 url_done = conn.execute(
                     "SELECT 1 FROM seen_article_urls WHERE url_norm = ?", (url_norm,)
                 ).fetchone()
-                if exists or url_done or url_norm in urls_in_batch:
+                if exists or url_done or url_norm in urls_in_batch or is_age_skipped_url(conn, url_norm):
                     continue
                 urls_in_batch.add(url_norm)
-
-                if should_skip_wroclaw_go_event_url(link):
-                    log.info(
-                        "Skipping RSS item (%s): %s",
-                        wroclaw_go_event_skip_reason(),
-                        url_norm,
-                    )
-                    conn.execute(
-                        "INSERT OR IGNORE INTO seen_articles (id) VALUES (?)", (article_id,)
-                    )
-                    record_seen_url(conn, url_norm)
+                dt = _resolve_rss_entry_publish_utc(entry, link, session, timeout)
+                if dt is None:
+                    log.warning("RSS item has no publish date (%s); skipping", link)
+                    _mark_stale_rss_item(conn, article_id, url_norm)
                     continue
-
-                published = entry.get("published_parsed")
-                if published:
-                    dt = datetime(*published[:6], tzinfo=timezone.utc)
-                else:
-                    dt = now_utc
-
-                # Some Polish outlets bump RSS <pubDate> on edits even when the story is old.
-                # For 24wroclaw.pl, verify the on-page first-publish timestamp before ingesting.
-                host = urlparse(link).netloc.lower()
-                if host.endswith("24wroclaw.pl") and session is not None and timeout is not None:
-                    canon = article_html_fetch_published_utc(session, link, timeout)
-                    if canon is None or canon < min_dt:
-                        log.info(
-                            "Skipping RSS item (canonical publish too old/unreadable): %s (rss=%s canon=%s min=%s)",
-                            url_norm,
-                            dt.isoformat(),
-                            canon.isoformat() if canon else None,
-                            min_dt.isoformat(),
-                        )
-                        conn.execute(
-                            "INSERT OR IGNORE INTO seen_articles (id) VALUES (?)", (article_id,)
-                        )
-                        record_seen_url(conn, url_norm)
-                        continue
-                    dt = canon
-
                 if dt < min_dt:
-                    # Prevent old items from resurfacing on every run.
-                    conn.execute(
-                        "INSERT OR IGNORE INTO seen_articles (id) VALUES (?)", (article_id,)
+                    log.info(
+                        "Skipping stale RSS item (published %s): %s",
+                        dt.astimezone(ZoneInfo(DISPLAY_TZ)).strftime("%d.%m.%Y %H:%M"),
+                        (entry.get("title") or link)[:80],
                     )
-                    record_seen_url(conn, url_norm)
+                    _mark_stale_rss_item(conn, article_id, url_norm)
                     continue
                 dt_local = dt.astimezone(tz)
                 new_articles.append(

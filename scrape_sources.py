@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse, urlunparse
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -43,149 +44,188 @@ def fetch_listing_html(session: requests.Session, url: str, timeout: tuple) -> s
     return resp.text or ""
 
 
-def _parse_iso_datetime_to_utc(value: str) -> datetime | None:
-    s = (value or "").strip()
-    if not s:
-        return None
-    # feedparser-style / HTML datetime often ends with Z
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    try:
-        dt = datetime.fromisoformat(s)
-    except ValueError:
+_PL_MONTH = {
+    "stycznia": 1,
+    "lutego": 2,
+    "marca": 3,
+    "kwietnia": 4,
+    "maja": 5,
+    "czerwca": 6,
+    "lipca": 7,
+    "sierpnia": 8,
+    "września": 9,
+    "wrzesnia": 9,
+    "października": 10,
+    "pazdziernika": 10,
+    "listopada": 11,
+    "grudnia": 12,
+}
+
+
+def _dt_to_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
 
 
-def html_extract_first_publish_utc_from_html(page_html: str) -> datetime | None:
-    """
-    Best-effort *first publish* time from article HTML.
-
-    Prefer `article:published_time` and JSON-LD `datePublished`.
-    Optionally fall back to `og:updated_time` / `dateModified` only if nothing else exists
-    (some sites omit published_time entirely).
-    """
-    html = page_html or ""
-    if not html.strip():
+def _parse_iso_datetime_to_utc(s: str) -> datetime | None:
+    raw = (s or "").strip()
+    if not raw:
         return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(raw)
+    except Exception:
+        return None
+    return _dt_to_utc(dt)
 
-    # OpenGraph / article meta (published first)
-    for pat in (
-        r'<meta[^>]+property=["\']article:published_time["\'][^>]+content=["\']([^"\']+)["\']',
-        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']article:published_time["\']',
-    ):
-        m = re.search(pat, html, flags=re.IGNORECASE)
-        if m:
-            dt = _parse_iso_datetime_to_utc(m.group(1))
-            if dt:
+
+def parse_rss_datetime_string(s: str) -> datetime | None:
+    """
+    Parse RSS/Atom date strings when feedparser leaves published_parsed empty
+    (common on portalsamorzadowy.pl: RFC822 without timezone).
+    """
+    raw = (s or "").strip()
+    if not raw:
+        return None
+    try:
+        from email.utils import parsedate_to_datetime
+
+        dt = parsedate_to_datetime(raw)
+    except Exception:
+        return None
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("Europe/Warsaw"))
+    return dt.astimezone(timezone.utc)
+
+
+def rss_entry_published_utc(entry) -> datetime | None:
+    """Original publish time from an RSS/Atom entry (never updated/modified)."""
+    published = entry.get("published_parsed")
+    if published:
+        return datetime(*published[:6], tzinfo=timezone.utc)
+    for key in ("published", "pubDate"):
+        raw = entry.get(key)
+        if not raw and hasattr(entry, key):
+            raw = getattr(entry, key, None)
+        if raw:
+            dt = parse_rss_datetime_string(str(raw))
+            if dt is not None:
                 return dt
+    return None
 
-    # JSON-LD (prefer datePublished; only use dateModified if no datePublished exists)
+
+_ARTICLE_JSONLD_TYPES = frozenset(
+    {"NewsArticle", "Article", "BlogPosting", "ReportageNewsArticle"}
+)
+
+
+def _jsonld_article_types(obj: dict) -> list[str]:
+    t = obj.get("@type")
+    if isinstance(t, str):
+        return [t]
+    if isinstance(t, list):
+        return [x for x in t if isinstance(x, str)]
+    return []
+
+
+def _jsonld_iter_objects(obj):
+    if obj is None:
+        return
+    if isinstance(obj, dict):
+        yield obj
+        for v in obj.values():
+            yield from _jsonld_iter_objects(v)
+        return
+    if isinstance(obj, list):
+        for it in obj:
+            yield from _jsonld_iter_objects(it)
+        return
+
+
+def html_extract_first_publish_utc_from_html(html: str) -> datetime | None:
+    h = html or ""
+
     for m in re.finditer(
-        r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
-        html,
-        flags=re.DOTALL | re.IGNORECASE,
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        h,
+        flags=re.IGNORECASE | re.DOTALL,
     ):
         raw = (m.group(1) or "").strip()
         if not raw:
             continue
         try:
             data = json.loads(raw)
-        except json.JSONDecodeError:
+        except Exception:
             continue
-
-        candidates = []
-        if isinstance(data, dict):
-            g = data.get("@graph")
-            if isinstance(g, list):
-                candidates = [x for x in g if isinstance(x, dict)]
-            else:
-                candidates = [data]
-        elif isinstance(data, list):
-            candidates = [x for x in data if isinstance(x, dict)]
-
-        best_pub: datetime | None = None
-        best_any: datetime | None = None
-        for item in candidates:
-            if not isinstance(item, dict):
+        for o in _jsonld_iter_objects(data):
+            if not isinstance(o, dict):
                 continue
-            t = item.get("@type")
-            types = [t] if isinstance(t, str) else ([x for x in t if isinstance(x, str)] if isinstance(t, list) else [])
-            if types and not any(x in ("NewsArticle", "Article", "WebPage") for x in types):
+            if not any(t in _ARTICLE_JSONLD_TYPES for t in _jsonld_article_types(o)):
                 continue
-            dp = item.get("datePublished")
+            dp = o.get("datePublished")
             if isinstance(dp, str):
                 dt = _parse_iso_datetime_to_utc(dp)
-                if dt and (best_pub is None or dt < best_pub):
-                    best_pub = dt
-            dm = item.get("dateModified")
-            if isinstance(dm, str):
-                dt = _parse_iso_datetime_to_utc(dm)
-                if dt and (best_any is None or dt < best_any):
-                    best_any = dt
-        if best_pub:
-            return best_pub
-        if best_any:
-            return best_any
+                if dt is not None:
+                    return dt
 
-    # Last-resort meta fallbacks
-    for pat in (
-        r'<meta[^>]+property=["\']og:updated_time["\'][^>]+content=["\']([^"\']+)["\']',
-        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:updated_time["\']',
+    for m in re.finditer(
+        r'<meta[^>]+property=["\']article:published_time["\'][^>]+content=["\']([^"\']+)["\']',
+        h,
+        flags=re.IGNORECASE,
     ):
-        m = re.search(pat, html, flags=re.IGNORECASE)
-        if m:
-            dt = _parse_iso_datetime_to_utc(m.group(1))
-            if dt:
-                return dt
+        dt = _parse_iso_datetime_to_utc(m.group(1))
+        if dt is not None:
+            return dt
+
+    for m in re.finditer(
+        r'<meta[^>]+name=["\'](?:pubdate|publish-date|date|dc\.date|dc\.date\.issued)["\'][^>]+content=["\']([^"\']+)["\']',
+        h,
+        flags=re.IGNORECASE,
+    ):
+        dt = _parse_iso_datetime_to_utc(m.group(1))
+        if dt is not None:
+            return dt
+
+    for m in re.finditer(
+        r"<time[^>]+datetime=['\"]([^'\"]+)['\"]",
+        h,
+        flags=re.IGNORECASE,
+    ):
+        dt = _parse_iso_datetime_to_utc(m.group(1))
+        if dt is not None:
+            return dt
+
+    m = re.search(
+        r"Opublikowano:\s*(\d{1,2})\s+([a-ząćęłńóśźż]+)\s+(\d{4})\s*(?:[-–]\s*(\d{1,2}):(\d{2}))?",
+        h,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        day = int(m.group(1))
+        month_name = (m.group(2) or "").strip().lower()
+        year = int(m.group(3))
+        hour = int(m.group(4) or "0")
+        minute = int(m.group(5) or "0")
+        month = _PL_MONTH.get(month_name)
+        if month:
+            try:
+                local = datetime(year, month, day, hour, minute, tzinfo=ZoneInfo("Europe/Warsaw"))
+                return local.astimezone(timezone.utc)
+            except Exception:
+                return None
 
     return None
 
 
-def echo24_extract_published_utc_from_html(page_html: str) -> datetime | None:
-    """Back-compat alias (echo24 uses the same HTML signals as most outlets)."""
-    return html_extract_first_publish_utc_from_html(page_html)
+def echo24_extract_published_utc_from_html(html: str) -> datetime | None:
+    return html_extract_first_publish_utc_from_html(html)
 
-
-def echo24_fetch_published_utc(session: requests.Session, url: str, timeout: tuple) -> datetime | None:
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
-    }
-    try:
-        resp = session.get(url, timeout=timeout, headers=headers)
-        resp.raise_for_status()
-        return html_extract_first_publish_utc_from_html(resp.text or "")
-    except Exception as e:
-        log.info("echo24: could not fetch/parse publish time for %s (%s)", url, e)
-        return None
-
-
-def article_html_fetch_published_utc(session: requests.Session, url: str, timeout: tuple) -> datetime | None:
-    """Fetch arbitrary article HTML and extract a best-effort first-publish timestamp."""
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
-    }
-    try:
-        resp = session.get(url, timeout=timeout, headers=headers)
-        resp.raise_for_status()
-        return html_extract_first_publish_utc_from_html(resp.text or "")
-    except Exception as e:
-        log.info("article html: could not fetch/parse publish time for %s (%s)", url, e)
-        return None
 
 
 @dataclass(frozen=True)
@@ -243,126 +283,115 @@ def extract_echo24_items(listing_html: str, base_url: str = "https://echo24.tv/"
     Target news URLs under /pl/11_wiadomosci/<id>_...html.
     """
     html = listing_html or ""
+    out: list[ListingItem] = []
     seen: set[str] = set()
     pat_rel = re.compile(r"^/pl/11_wiadomosci/\d+_[^?#]+\.html$", re.IGNORECASE)
     pat_abs = re.compile(
         r"^https?://(?:www\.)?echo24\.tv/pl/11_wiadomosci/\d+_[^?#]+\.html$",
         re.IGNORECASE,
     )
-    id_re = re.compile(r"/pl/11_wiadomosci/(\d+)_", re.IGNORECASE)
-
-    def echo24_story_id(url: str) -> int | None:
-        m = id_re.search(url or "")
-        if not m:
-            return None
-        try:
-            return int(m.group(1))
-        except ValueError:
-            return None
-
-    def split_echo24_homepage_sections(raw: str) -> tuple[str, str]:
-        """
-        echo24 homepage mixes fresh "Aktualności" with long-lived accident digests under a
-        "Wypadki" block. The digests often contain months-old /11_wiadomosci/ IDs that are not
-        "new news", but they still match our URL pattern — split so we can apply stricter gates.
-        """
-        low = (raw or "").lower()
-        # Prefer the accidents/regional digest heading if present.
-        for needle in (
-            "wypadki",
-            "na sygnale",
-        ):
-            i = low.find(needle)
-            if i != -1:
-                return raw[:i], raw[i:]
-        return raw, ""
-
-    def filter_echo24_candidates(tagged: list[tuple[ListingItem, str]]) -> list[ListingItem]:
-        if not tagged:
-            return []
-        pre_html, post_html = split_echo24_homepage_sections(html)
-
-        def max_id_in_html(blob: str) -> int | None:
-            ids = [int(m.group(1)) for m in id_re.finditer(blob or "")]
-            return max(ids) if ids else None
-
-        max_pre = max_id_in_html(pre_html) or 0
-        max_post = max_id_in_html(post_html) or 0
-        if not max_pre:
-            max_pre = max(
-                (echo24_story_id(it.url) or 0 for it, sec in tagged if sec == "pre"),
-                default=0,
-            )
-
-        # Primary gate: ignore very stale IDs compared to the newest ID seen above the digest area.
-        # (echo24 IDs are monotonic enough for this to be a strong freshness signal.)
-        min_pre_id = max(0, int(max_pre) - 2000)
-
-        # Secondary gate: items that only appear in the digest/footer area must be near-current.
-        digest_min_id = max(0, int(max_pre) - 800) if max_pre else 0
-
-        kept: list[ListingItem] = []
-        for it, sec in tagged:
-            sid = echo24_story_id(it.url)
-            if sid is None:
-                continue
-
-            if sec == "pre":
-                if sid < min_pre_id:
-                    continue
-                kept.append(it)
-                continue
-
-            # Post-section: allow only if it looks like a genuinely fresh item (not an old digest).
-            if max_post and sid >= max(int(max_post) - 300, digest_min_id):
-                kept.append(it)
-                continue
-
-        return kept
 
     try:
         from bs4 import BeautifulSoup  # type: ignore
 
-        pre_html, post_html = split_echo24_homepage_sections(html)
-        tagged: list[tuple[ListingItem, str]] = []
-
-        def parse_fragment(fragment: str, sec: str) -> None:
-            if not (fragment or "").strip():
-                return
-            soup = BeautifulSoup(fragment, "html.parser")
-            for a in soup.select("a[href]"):
-                href = (a.get("href") or "").strip()
-                if not href:
-                    continue
-                href_norm = _strip_query_and_fragment(urljoin(base_url, href))
-                if not (pat_rel.match(href) or pat_abs.match(href_norm)):
-                    continue
-                title = a.get_text(" ", strip=True)
-                if not title or len(title) < 10:
-                    continue
-                url = href_norm
-                if url in seen:
-                    continue
-                seen.add(url)
-                tagged.append((ListingItem(url=url, title=title), sec))
-
-        parse_fragment(pre_html, "pre")
-        parse_fragment(post_html, "post")
-        return filter_echo24_candidates(tagged)
-    except Exception:
-        pass
-
-    pre_html, post_html = split_echo24_homepage_sections(html)
-    tagged: list[tuple[ListingItem, str]] = []
-    for sec, frag in (("pre", pre_html), ("post", post_html)):
-        if not (frag or "").strip():
-            continue
-        for m in re.finditer(r'href=["\'](/pl/11_wiadomosci/\d+_[^"\']+?\.html)["\']', frag, flags=re.IGNORECASE):
-            href = m.group(1).strip()
-            url = _strip_query_and_fragment(urljoin(base_url, href))
+        soup = BeautifulSoup(html, "html.parser")
+        for a in soup.select("a[href]"):
+            href = (a.get("href") or "").strip()
+            if not href:
+                continue
+            href_norm = _strip_query_and_fragment(urljoin(base_url, href))
+            if not (pat_rel.match(href) or pat_abs.match(href_norm)):
+                continue
+            title = a.get_text(" ", strip=True)
+            if not title or len(title) < 10:
+                continue
+            url = href_norm
             if url in seen:
                 continue
             seen.add(url)
-            tagged.append((ListingItem(url=url, title=""), sec))
-    return filter_echo24_candidates(tagged)
+            out.append(ListingItem(url=url, title=title))
+        return out
+    except Exception:
+        pass
 
+    for m in re.finditer(r'href=["\'](/pl/11_wiadomosci/\d+_[^"\']+?\.html)["\']', html, flags=re.IGNORECASE):
+        href = m.group(1).strip()
+        url = _strip_query_and_fragment(urljoin(base_url, href))
+        if url in seen:
+            continue
+        seen.add(url)
+        out.append(ListingItem(url=url, title=""))
+    return out
+
+
+_ARTYKUL_ID_RE = re.compile(
+    r"^/artykul/(\d+)(?:/k/\d+)?(?:/([^/?#]+))?$",
+    re.IGNORECASE,
+)
+
+
+def canonical_walbrzych24_article_url(url: str) -> str:
+    """
+    Collapse /artykul/{id}/k/{n}/{slug} variants to /artykul/{id}/{slug} for stable dedup.
+    """
+    raw = _strip_query_and_fragment((url or "").strip())
+    p = urlparse(raw)
+    m = _ARTYKUL_ID_RE.match(p.path or "")
+    if not m:
+        return raw
+    article_id, slug = m.group(1), m.group(2)
+    path = f"/artykul/{article_id}/{slug}" if slug else f"/artykul/{article_id}"
+    scheme = (p.scheme or "https").lower()
+    netloc = (p.netloc or "").lower()
+    if netloc.startswith("www."):
+        netloc = netloc[4:]
+    return urlunparse((scheme, netloc, path, "", "", ""))
+
+
+def extract_walbrzych24_items(
+    listing_html: str, base_url: str = "https://www.walbrzych24.com/"
+) -> list[ListingItem]:
+    """
+    Extract (url, title) from https://www.walbrzych24.com/ (Wałbrzych local news).
+    """
+    html = listing_html or ""
+    out: list[ListingItem] = []
+    seen: set[str] = set()
+
+    try:
+        from bs4 import BeautifulSoup  # type: ignore
+
+        soup = BeautifulSoup(html, "html.parser")
+        for a in soup.select("a[href]"):
+            href = (a.get("href") or "").strip()
+            if not href or "/artykul/" not in href:
+                continue
+            title = a.get_text(" ", strip=True)
+            if not title or len(title) < 12:
+                continue
+            url = canonical_walbrzych24_article_url(urljoin(base_url, href))
+            p = urlparse(url)
+            if not _ARTYKUL_ID_RE.match(p.path or ""):
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            out.append(ListingItem(url=url, title=title))
+        return out
+    except Exception:
+        pass
+
+    for m in re.finditer(
+        r'href=["\']([^"\']*/artykul/\d+[^"\']*)["\']',
+        html,
+        flags=re.IGNORECASE,
+    ):
+        url = canonical_walbrzych24_article_url(urljoin(base_url, m.group(1).strip()))
+        if url in seen:
+            continue
+        p = urlparse(url)
+        if not _ARTYKUL_ID_RE.match(p.path or ""):
+            continue
+        seen.add(url)
+        out.append(ListingItem(url=url, title=""))
+    return out

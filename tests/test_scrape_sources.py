@@ -1,4 +1,9 @@
-from scrape_sources import extract_24wroclaw_items, extract_echo24_items
+from scrape_sources import (
+    canonical_walbrzych24_article_url,
+    extract_24wroclaw_items,
+    extract_echo24_items,
+    extract_walbrzych24_items,
+)
 
 
 def test_extract_24wroclaw_items_basic():
@@ -39,32 +44,27 @@ def test_extract_echo24_items_accepts_absolute_href():
     assert items[0].url == "https://echo24.tv/pl/11_wiadomosci/94224_wielka-budowa-w-sercu-wroclawia.html"
 
 
-def test_extract_echo24_drops_old_digest_links_under_wypadki():
-    html = """
-    <html><body>
-      <a href="/pl/11_wiadomosci/94686_wroclawskie-kamienice.html">Wrocławskie kamienice nie do poznania</a>
-      <h2>Wypadki – Dolny Śląsk</h2>
-      <a href="/pl/11_wiadomosci/90501_stary-wypadek.html">Informacja o porwaniu i pościg</a>
-      <a href="/pl/11_wiadomosci/90059_inny-stary-wypadek.html">Po śmiertelnym wypadku utrudnienia</a>
-    </body></html>
-    """
-    items = extract_echo24_items(html, base_url="https://echo24.tv/")
-    urls = [it.url for it in items]
-    assert "https://echo24.tv/pl/11_wiadomosci/94686_wroclawskie-kamienice.html" in urls
-    assert "https://echo24.tv/pl/11_wiadomosci/90501_stary-wypadek.html" not in urls
-    assert "https://echo24.tv/pl/11_wiadomosci/90059_inny-stary-wypadek.html" not in urls
+def test_canonical_walbrzych24_article_url_collapses_k_variants():
+    a = canonical_walbrzych24_article_url(
+        "https://www.walbrzych24.com/artykul/51682/k/1/mandat-albo-pierwsza-pomoc"
+    )
+    b = canonical_walbrzych24_article_url(
+        "https://www.walbrzych24.com/artykul/51682/k/17/mandat-albo-pierwsza-pomoc"
+    )
+    assert a == b == "https://walbrzych24.com/artykul/51682/mandat-albo-pierwsza-pomoc"
 
 
-def test_extract_echo24_allows_fresh_post_section_item():
+def test_extract_walbrzych24_items_basic():
     html = """
     <html><body>
-      <a href="/pl/11_wiadomosci/94610_aktualnosc.html">Świeży lead</a>
-      <h2>Wypadki – Dolny Śląsk</h2>
-      <a href="/pl/11_wiadomosci/94590_blisko-wypadku.html">Świeży wypadek w sekcji digest</a>
+      <a href="/artykul/51689/k/1/po-premierze-ksiazki">Po premierze książki w Wałbrzychu</a>
+      <a href="/artykul/51647/zajecia-gordonowskie-w-walbrzychu">Zajęcia gordonowskie w Wałbrzychu</a>
+      <a href="/kategoria/31">Kategoria</a>
     </body></html>
     """
-    items = extract_echo24_items(html, base_url="https://echo24.tv/")
+    items = extract_walbrzych24_items(html, base_url="https://www.walbrzych24.com/")
     urls = [it.url for it in items]
-    assert "https://echo24.tv/pl/11_wiadomosci/94610_aktualnosc.html" in urls
-    assert "https://echo24.tv/pl/11_wiadomosci/94590_blisko-wypadku.html" in urls
+    assert "https://walbrzych24.com/artykul/51689/po-premierze-ksiazki" in urls
+    assert "https://walbrzych24.com/artykul/51647/zajecia-gordonowskie-w-walbrzychu" in urls
+    assert len(urls) == len(set(urls))
 
