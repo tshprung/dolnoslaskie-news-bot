@@ -82,7 +82,7 @@ def radio_wroc_ticker_skip_reason() -> str:
 # We only ingest items from the last 24 hours.
 MAX_ARTICLE_AGE_HOURS = 24
 
-DEDUP_WINDOW_HOURS = 8
+DEDUP_WINDOW_HOURS = 24
 DEDUP_JACCARD_MIN = 0.20
 DEDUP_DICE_MIN = 0.45
 DEDUP_DICE_RELAXED = 0.38

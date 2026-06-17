@@ -114,7 +114,7 @@ def test_same_batch_first_wins():
 
 def test_load_dedup_snapshots_respects_window():
     conn = _memory_conn()
-    old = int((datetime.now(timezone.utc) - timedelta(hours=20)).timestamp())
+    old = int((datetime.now(timezone.utc) - timedelta(hours=30)).timestamp())
     conn.execute(
         "INSERT INTO dedup_recent (article_id, title, summary, sort_epoch) VALUES (?,?,?,?)",
         ("old", "t", "s", old),
@@ -125,3 +125,27 @@ def test_load_dedup_snapshots_respects_window():
     rows = load_dedup_snapshots(conn, DEDUP_WINDOW_HOURS)
     ids = {r["id"] for r in rows}
     assert "old" not in ids
+
+
+def test_english_dedup_catches_zoo_dodo_cross_source_nine_hours_apart():
+    from dedup import is_english_near_duplicate, record_sent_en_snapshot
+
+    conn = _memory_conn()
+    conn.execute(
+        "CREATE TABLE dedup_recent_en ("
+        "article_id TEXT PRIMARY KEY, summary_en TEXT NOT NULL, sort_epoch INTEGER NOT NULL)"
+    )
+    t1 = datetime(2026, 6, 16, 9, 27, tzinfo=timezone.utc)
+    t2 = datetime(2026, 6, 16, 18, 3, tzinfo=timezone.utc)
+    en1 = (
+        "Fundacja ZOO Wrocław – DODO, established by ZOO Wrocław in 2016, marks a decade of efforts "
+        "to save endangered species worldwide. The foundation supports projects in Europe, Africa, and Asia."
+    )
+    en2 = (
+        "The ZOO Wrocław Foundation – DODO marked its 10th anniversary, celebrating its efforts to "
+        "support endangered animal populations globally across Europe, Africa, and Asia."
+    )
+    record_sent_en_snapshot(conn, "radio-161500", en1, t1)
+    dup, detail = is_english_near_duplicate(conn, "wroclaw-dodo", en2, t2)
+    assert dup is True
+    assert detail
