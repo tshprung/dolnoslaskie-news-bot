@@ -1,7 +1,6 @@
 """Daily digest storage and delivery for the Dolnośląskie news bot."""
 import html
 import logging
-import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -38,8 +37,7 @@ def store_digest_article(conn, article, summary):
 
 
 def _digest_hour_reached(hour: int) -> bool:
-    now = datetime.now(TZ)
-    return now.hour >= hour
+    return datetime.now(TZ).hour >= hour
 
 
 def _already_sent_today(conn, today: str) -> bool:
@@ -67,9 +65,6 @@ def _pending(conn, max_scan=60):
 def _select_and_rank(client, rows, max_items):
     if not rows:
         return []
-    if len(rows) <= max_items:
-        # Still rank when there are enough stories to make ordering useful.
-        pass
     lines = []
     for i, row in enumerate(rows, 1):
         _, title, summary, _, source, date, _ = row
@@ -147,19 +142,13 @@ def maybe_send_daily_digest(conn, client, session, timeout, chat_id, dry_run, en
         log.info("DRY_RUN daily digest: %s", message.replace("\n", " ")[:1000])
     else:
         send_to_telegram(session, message, chat_id=chat_id, timeout=timeout)
-    selected_ids = [row[0] for row in selected]
-    placeholders = ",".join("?" for _ in selected_ids)
+
+    # Every pending story belongs to this digest cycle. Only the selected stories
+    # are shown, while the rest are intentionally discarded rather than carried
+    # indefinitely into future digests.
     conn.execute(
-        f"UPDATE digest_articles SET digested_at=CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
-        selected_ids,
-    )
-    # Also mark lower-priority pending stories as digested if they are older than the selected batch.
-    # This prevents an endless backlog while retaining a small safety window for the next day.
-    conn.execute(
-        "UPDATE digest_articles SET digested_at=CURRENT_TIMESTAMP "
-        "WHERE digested_at IS NULL AND sort_epoch < ?",
-        (int(now.timestamp()) - 24 * 3600,),
+        "UPDATE digest_articles SET digested_at=CURRENT_TIMESTAMP WHERE digested_at IS NULL"
     )
     _set_sent_today(conn, today)
     conn.commit()
-    log.info("Daily digest sent: %d stories", len(selected))
+    log.info("Daily digest sent: %d stories selected from %d pending", len(selected), len(rows))
