@@ -6,7 +6,7 @@
 2. **Repository → Settings → Secrets and variables → Actions** — add the same secrets you use for the Polish bot (or new deploy user):
    - `VM_HOST` — server hostname or IP  
    - `VM_USER` — SSH user (e.g. `ubuntu`, `debian`)  
-   - `VM_SSH_KEY` — private key (full PEM) that can log in as `VM_USER`  
+   - `VM_SSH_KEY` — private key (full PEM) that can log in as `VM_USER`
 
 Optional: instead of the token in the workflow, you can use a **Deploy key** on the VM and `git@github.com:tshprung/dolnoslaskie-news-bot.git` in the script; the current workflow uses `github.token` over HTTPS so you do not need that for a normal setup.
 
@@ -47,22 +47,30 @@ For a **public** repo you can still bootstrap with a normal `git clone` into `/o
 
 ## 5. Cron
 
+The bot is designed to run frequently so RSS sources are checked promptly. Non-RSS listing sources remain hourly-gated internally, so increasing cron frequency does not increase their scrape frequency.
+
 ```bash
 crontab -e
 ```
 
-Example (every 30 minutes, on the **:20** and **:50** of each hour — avoids clashing with top-of-hour jobs):
-
-```cron
-20,50 * * * * /opt/dolnoslaskie_news/run.sh
-```
-
-If the server uses UTC but you want those minutes in **Europe/Warsaw**, prefix the line (same idea as the weekly job below):
+Recommended schedule (every 30 minutes, on the **:20** and **:50** of each hour — avoids clashing with top-of-hour jobs):
 
 ```cron
 CRON_TZ=Europe/Warsaw
 20,50 * * * * /opt/dolnoslaskie_news/run.sh
 ```
+
+The normal delivery mode is a **daily digest**, controlled by:
+
+```env
+NEWS_DIGEST_ENABLED=1
+NEWS_DIGEST_HOUR=19
+NEWS_DIGEST_MAX_ITEMS=10
+```
+
+The digest is sent on the first run at or after the configured hour. Accepted stories are stored in SQLite until the daily brief is sent; they are not posted individually.
+
+**Important:** this means changing cron to every 30 minutes improves collection freshness, but it does **not** create 30-minute Telegram notifications. The user still receives one daily brief.
 
 **Weekly community message** (English intro + support link): `run_weekly_announce.sh` posts **once per ISO week** when the script runs in the configured window (default **Sunday 18:00** `Europe/Warsaw`). Use a **second** cron line with `CRON_TZ` so the hour matches Warsaw even if the server is UTC:
 
