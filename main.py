@@ -1,5 +1,6 @@
 import html
 import logging
+import os
 import sqlite3
 import time
 
@@ -23,6 +24,7 @@ from config import (
 )
 from database import get_new_articles, init_db, record_seen_url
 from dedup import deduplicate, is_english_near_duplicate, record_sent_en_snapshot, record_sent_snapshot
+from digest import init_digest_db, maybe_send_daily_digest, store_digest_article
 from http_util import make_http_session, request_timeout
 from summarize import openai_client, summarize_in_english
 from telegram_bot import notify_admin, send_to_telegram, telegram_html_anchor
@@ -40,8 +42,22 @@ def _mark_article_done(conn: sqlite3.Connection, article: dict) -> None:
     conn.commit()
 
 
+def _digest_config():
+    enabled = os.environ.get("NEWS_DIGEST_ENABLED", "1").strip() == "1"
+    try:
+        hour = int(os.environ.get("NEWS_DIGEST_HOUR", "19"))
+    except ValueError:
+        hour = 19
+    try:
+        max_items = max(1, min(15, int(os.environ.get("NEWS_DIGEST_MAX_ITEMS", "10"))))
+    except ValueError:
+        max_items = 10
+    return enabled, max(0, min(23, hour)), max_items
+
+
 def main():
     conn = init_db()
+    init_digest_db(conn)
     session = make_http_session()
     to = request_timeout()
     client: OpenAI = openai_client()
@@ -91,35 +107,27 @@ def main():
                     log.info(f"Skipped (classifier: SKIP): {article['title'][:70]}")
                 _mark_article_done(conn, article)
                 continue
-            # Second-layer dedup: avoid posting near-identical English blurbs even if RSS metadata differs.
+            # Second-layer dedup: avoid near-identical English blurbs even if RSS metadata differs.
             dup_en, dup_detail = is_english_near_duplicate(conn, article["id"], summary, article["sort_key"])
             if dup_en:
                 log.info("Skipped (%s): %s", dup_detail, article["title"][:70])
                 _mark_article_done(conn, article)
                 continue
-            body = html.escape(summary, quote=False)
-            footer_label = f"{article['source']} | {article['date']}"
-            message = f"{body}\n\n{telegram_html_anchor(article['link'], footer_label)}"
-            if TELEGRAM_LINK_PREVIEW_ENABLED:
-                # Telegram generates the rich preview card (image) only for a raw URL,
-                # not for HTML anchors. Put it on its own line like the screenshot.
-                message = f"{message}\n{article['link']}"
-            # Mark seen BEFORE sending so a crash after Telegram POST
-            # doesn't cause reposts on the next cron run.
+
+            # All accepted stories are retained for the daily brief. They are no longer
+            # posted immediately; this is the default delivery model.
+            store_digest_article(conn, article, summary)
             _mark_article_done(conn, article)
-            if DRY_RUN:
-                log.info("DRY_RUN would send: %s", message.replace("\n", " ")[:240])
-            else:
-                send_to_telegram(session, message, timeout=to)
             record_sent_snapshot(conn, article)
             record_sent_en_snapshot(conn, article["id"], summary, article["sort_key"])
             conn.commit()
-            log.info(f"Sent: {article['title'][:70]}")
+            log.info("Queued for daily digest: %s", article["title"][:70])
             sent_count += 1
+
             if DRY_RUN and sent_count >= DRY_RUN_MAX_POSTS:
                 log.info("DRY_RUN reached max posts (%s); stopping early", DRY_RUN_MAX_POSTS)
                 break
-            time.sleep(5)
+            time.sleep(1)
         except Exception as e:
             log.exception("Error on article %s", article["id"])
             try:
@@ -127,6 +135,22 @@ def main():
                     notify_admin(session, article, f"runtime error: {e}", ADMIN_TELEGRAM_ID, to)
             except Exception:
                 pass
+
+    digest_enabled, digest_hour, digest_max_items = _digest_config()
+    try:
+        maybe_send_daily_digest(
+            conn,
+            client,
+            session,
+            to,
+            os.environ.get("TELEGRAM_CHANNEL_ID", ""),
+            DRY_RUN,
+            digest_enabled,
+            digest_hour,
+            digest_max_items,
+        )
+    except Exception:
+        log.exception("Daily digest delivery failed")
 
     conn.close()
 
