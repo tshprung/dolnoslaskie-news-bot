@@ -1,5 +1,6 @@
 """Daily digest storage and delivery for the Dolnośląskie news bot."""
 import html
+import json
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -10,7 +11,7 @@ log = logging.getLogger(__name__)
 TZ = ZoneInfo("Europe/Warsaw")
 
 # Telegram message limit is 4096 characters.
-# Keep a safety margin for HTML entities / formatting.
+# Keep a safety margin.
 TELEGRAM_SAFE_LIMIT = 3900
 
 
@@ -36,6 +37,7 @@ def store_digest_article(conn, article, summary):
         if hasattr(sort_key, "timestamp")
         else int(datetime.now(TZ).timestamp())
     )
+
     conn.execute(
         "INSERT OR IGNORE INTO digest_articles "
         "(id,title,summary_en,url,source,article_date,sort_epoch) "
@@ -83,11 +85,34 @@ def _pending(conn, max_scan=60):
     ).fetchall()
 
 
+def _fallback_headline(title, summary):
+    """Create a usable English fallback headline from the English summary.
+
+    This is only used if the headline-generation JSON cannot be parsed.
+    """
+    text = " ".join(str(summary or "").split()).strip()
+
+    if not text:
+        return "Lower Silesia regional development"
+
+    # Use the first sentence where possible.
+    for separator in (". ", "! ", "? "):
+        if separator in text:
+            text = text.split(separator, 1)[0].strip()
+            break
+
+    if len(text) > 110:
+        text = text[:107].rsplit(" ", 1)[0].rstrip() + "..."
+
+    return text
+
+
 def _select_and_rank(client, rows, max_items):
     if not rows:
-        return []
+        return [], {}
 
     lines = []
+
     for i, row in enumerate(rows, 1):
         _, title, summary, _, source, date, _ = row
         lines.append(
@@ -98,62 +123,109 @@ def _select_and_rank(client, rows, max_items):
         )
 
     prompt = (
-        "You are selecting a concise daily local-news brief for a resident "
-        "of Wroclaw, Poland. "
-        "The goal is practical awareness: prioritize developments that can "
-        "affect daily life, transport, infrastructure, public services, "
-        "safety, local government, prices, weather, health, education, "
-        "major regional developments, and important local events. "
+        "You are the editor of a concise daily local-news brief for a "
+        "resident of Wroclaw, Poland.\n\n"
+        "The goal is practical awareness of what is happening in "
+        "Lower Silesia today. Prioritize developments that can affect "
+        "daily life: transport, infrastructure, public services, safety, "
+        "local government, prices, water, weather, health, education, "
+        "major regional developments, and important local events.\n\n"
         "Deprioritize celebrity, generic national politics, sports, "
-        "trivial crime, advertising, and low-impact human-interest stories. "
-        "Merge near-duplicates by selecting only the strongest item. "
-        f"Select at most {max_items} items. "
-        "Return ONLY a comma-separated list of the selected item numbers "
-        "in importance order, with no other text.\n\n"
+        "trivial crime, advertising, and low-impact human-interest stories.\n\n"
+        "Merge near-duplicates by selecting only the strongest item.\n\n"
+        f"Select at most {max_items} items in importance order.\n"
+        "For every selected item, write a concise, factual English headline. "
+        "Do not translate word-for-word if that produces unnatural English. "
+        "The headline should describe the actual event and must not introduce "
+        "facts that are not supported by the supplied title or summary.\n\n"
+        "Return ONLY valid JSON in exactly this structure:\n"
+        '{"items":[{"index":1,"headline":"English headline"},'
+        '{"index":4,"headline":"English headline"}]}\n\n'
+        "Do not include any explanation or additional keys.\n\n"
         + "\n\n".join(lines)
     )
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            max_tokens=120,
+            max_tokens=500,
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a strict local-news editor.",
+                    "content": (
+                        "You are a strict local-news editor. "
+                        "Write natural, factual English headlines."
+                    ),
                 },
                 {"role": "user", "content": prompt},
             ],
         )
 
         raw = (response.choices[0].message.content or "").strip()
+        data = json.loads(raw)
+
+        items = data.get("items")
+        if not isinstance(items, list):
+            raise ValueError("Digest ranking response has no items list")
 
         selected = []
-        for token in raw.split(","):
-            try:
-                idx = int(token.strip()) - 1
-            except ValueError:
+        headlines = {}
+
+        for item in items:
+            if not isinstance(item, dict):
                 continue
 
-            if 0 <= idx < len(rows) and idx not in selected:
-                selected.append(idx)
+            try:
+                idx = int(item.get("index")) - 1
+            except (TypeError, ValueError):
+                continue
+
+            if not (0 <= idx < len(rows)):
+                continue
+
+            if idx in [rows.index(r) for r in selected]:
+                continue
+
+            headline = str(item.get("headline") or "").strip()
+
+            if not headline:
+                continue
+
+            selected.append(rows[idx])
+            headlines[idx] = headline
 
             if len(selected) >= max_items:
                 break
 
-        return [rows[i] for i in selected]
+        if not selected:
+            raise ValueError("Digest ranking returned no valid selections")
+
+        # Make sure every selected item has a headline.
+        for row in selected:
+            idx = rows.index(row)
+            if idx not in headlines:
+                headlines[idx] = _fallback_headline(
+                    row[1],
+                    row[2],
+                )
+
+        return selected, headlines
 
     except Exception as exc:
         log.warning("Digest ranking failed: %s", exc)
-        return rows[:max_items]
+
+        # Safe fallback: preserve the existing ranking behavior while
+        # keeping the Telegram digest in English as much as possible.
+        selected = rows[:max_items]
+        headlines = {
+            idx: _fallback_headline(row[1], row[2])
+            for idx, row in enumerate(selected)
+        }
+
+        return selected, headlines
 
 
-def _build_message(rows, summaries=None):
-    """Build one Telegram-safe HTML message.
-
-    summaries optionally allows a caller to replace individual summaries
-    without changing the database rows.
-    """
+def _build_message(rows, headlines):
     if not rows:
         return None
 
@@ -165,13 +237,20 @@ def _build_message(rows, summaries=None):
     ]
 
     for i, row in enumerate(rows, 1):
-        _, title, summary, url, source, _, _ = row
+        row_index = i - 1
 
-        if summaries and i - 1 < len(summaries):
-            summary = summaries[i - 1]
+        _, original_title, summary, url, source, _, _ = row
+
+        headline = headlines.get(row_index)
+
+        if not headline:
+            headline = _fallback_headline(
+                original_title,
+                summary,
+            )
 
         parts.append(
-            f"\n<b>{i}. {html.escape(title, quote=False)}</b>\n"
+            f"\n<b>{i}. {html.escape(headline, quote=False)}</b>\n"
             f"{html.escape(summary, quote=False)}\n"
             f"{telegram_html_anchor(url, source)}"
         )
@@ -181,63 +260,75 @@ def _build_message(rows, summaries=None):
     return "\n".join(parts)
 
 
-def _fit_message(selected):
+def _fit_message(selected, headlines):
     """Fit the digest safely under Telegram's message-size limit.
 
-    First remove the least-important selected stories.
-    If a single story is still too long, shorten its summary.
+    The least important selected stories are removed first.
+    If a single story is still too long, only its summary is shortened.
     """
     if not selected:
-        return None, []
+        return None, [], {}
 
-    # First try the full selection.
     rows = list(selected)
+    current_headlines = dict(headlines)
 
     while rows:
-        message = _build_message(rows)
+        message = _build_message(rows, current_headlines)
 
         if message and len(message) <= TELEGRAM_SAFE_LIMIT:
-            return message, rows
+            return message, rows, current_headlines
 
-        # Remove the least important story first.
         if len(rows) > 1:
-            rows.pop()
+            removed = rows.pop()
+
+            # Rebuild headline mapping after removing the last item.
+            current_headlines = {
+                i: current_headlines.get(i, "")
+                for i in range(len(rows))
+            }
             continue
 
-        # Only one story remains and it is still too long.
+        # One story remains and it is still too long.
         row = rows[0]
-        _, title, summary, url, source, _, _ = row
+        _, original_title, summary, url, source, _, _ = row
 
-        # Preserve the title and source link; shorten only the summary.
-        escaped_title = html.escape(title, quote=False)
-        anchor = telegram_html_anchor(url, source)
+        headline = current_headlines.get(
+            0,
+            _fallback_headline(original_title, summary),
+        )
 
-        fixed = (
+        header = (
             f"<b>Lower Silesia — Daily Brief | "
             f"{datetime.now(TZ).strftime('%d %b %Y')}</b>\n"
             "<i>What is worth knowing about the region today.</i>\n\n"
-            f"<b>1. {escaped_title}</b>\n"
+            f"<b>1. {html.escape(headline, quote=False)}</b>\n"
         )
 
-        suffix = f"\n{anchor}\n\n<i>1 story</i>"
+        suffix = (
+            f"\n{telegram_html_anchor(url, source)}"
+            "\n\n<i>1 story</i>"
+        )
 
-        available = TELEGRAM_SAFE_LIMIT - len(fixed) - len(suffix)
+        available = TELEGRAM_SAFE_LIMIT - len(header) - len(suffix)
 
         if available <= 50:
             shortened = "Summary unavailable."
         else:
-            raw_summary = str(summary)
-            shortened = raw_summary[: available - 3].rstrip() + "..."
+            raw_summary = str(summary or "")
+            shortened = (
+                raw_summary[: max(1, available - 3)].rstrip()
+                + "..."
+            )
 
         message = (
-            fixed
+            header
             + html.escape(shortened, quote=False)
             + suffix
         )
 
-        return message, rows
+        return message, rows, {0: headline}
 
-    return None, []
+    return None, [], {}
 
 
 def maybe_send_daily_digest(
@@ -267,16 +358,25 @@ def maybe_send_daily_digest(
         log.info("Daily digest: no pending stories")
         return
 
-    selected = _select_and_rank(client, rows, max_items)
+    selected, headlines = _select_and_rank(
+        client,
+        rows,
+        max_items,
+    )
 
     if not selected:
         log.info("Daily digest: ranking returned no stories")
         return
 
-    message, fitted_rows = _fit_message(selected)
+    message, fitted_rows, fitted_headlines = _fit_message(
+        selected,
+        headlines,
+    )
 
     if not message:
-        log.warning("Daily digest: could not build a Telegram-safe message")
+        log.warning(
+            "Daily digest: could not build a Telegram-safe message"
+        )
         return
 
     log.info(
@@ -304,11 +404,7 @@ def maybe_send_daily_digest(
         log.exception("Daily digest delivery failed")
         return
 
-    # Only consume the pending stories after Telegram confirms delivery.
-    #
-    # Every pending story belongs to this digest cycle. The selected stories
-    # are shown, while the remaining stories are intentionally discarded
-    # rather than carried indefinitely into future digests.
+    # Only consume pending stories after Telegram confirms delivery.
     conn.execute(
         "UPDATE digest_articles "
         "SET digested_at=CURRENT_TIMESTAMP "
