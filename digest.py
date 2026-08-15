@@ -11,7 +11,6 @@ from telegram_bot import send_to_telegram, telegram_html_anchor
 log = logging.getLogger(__name__)
 TZ = ZoneInfo("Europe/Warsaw")
 
-# Telegram message limit is 4096 characters. Keep a safety margin.
 TELEGRAM_SAFE_LIMIT = 3900
 MAX_HEADLINE_CHARS = 110
 
@@ -130,33 +129,30 @@ def _near_duplicate(row_a, row_b):
 
     overlap = len(a & b) / min(len(a), len(b))
     jaccard = len(a & b) / len(a | b)
-
-    # Require strong overlap so unrelated local stories are not removed.
     return overlap >= 0.80 and jaccard >= 0.55
 
 
-def _deduplicate_selected(selected_pairs):
+def _deduplicate_rows(rows):
     """Remove obvious duplicate events while preserving ranking order."""
     result = []
-    for row, headline in selected_pairs:
+    for row in rows:
         duplicate_of = None
-        for existing_row, _ in result:
+        for existing_row in result:
             if _near_duplicate(row, existing_row):
                 duplicate_of = existing_row
                 break
-
         if duplicate_of is None:
-            result.append((row, headline))
+            result.append(row)
         else:
             log.info(
                 "Digest duplicate removed: %r ~= %r",
                 row[1][:100], duplicate_of[1][:100],
             )
-
     return result
 
 
-def _select_and_rank(client, rows, max_items):
+def _select_rows(client, rows, max_items):
+    """Ask the model only which rows to select. Headlines are generated separately."""
     if not rows:
         return []
 
@@ -177,77 +173,93 @@ def _select_and_rank(client, rows, max_items):
         "local events. Deprioritize celebrity, generic national politics, sports, "
         "trivial crime, advertising, and low-impact human-interest stories.\n\n"
         "Treat multiple articles about the same underlying event as ONE story. "
-        "Never select two articles that report the same event, even if they come "
-        "from different sources. Choose the strongest/most informative version.\n\n"
+        "Never select two articles that report the same event. Choose the strongest "
+        "or most informative version.\n\n"
         f"Select at most {max_items} UNIQUE events in importance order.\n"
-        "For every selected event, write one concise factual English headline, "
-        "normally no more than 90 characters. Do not translate word-for-word if "
-        "that produces unnatural English. Do not introduce facts not supported by "
-        "the supplied title or summary.\n\n"
         "Return ONLY valid JSON in exactly this structure:\n"
-        '{"items":[{"index":1,"headline":"English headline"},'
-        '{"index":4,"headline":"English headline"}]}\n\n'
-        "Do not include any explanation or additional keys.\n\n"
+        '{"indices":[1,4,7]}\n\n'
+        "The indices MUST refer to the numbered articles above. Do not return headlines.\n\n"
         + "\n\n".join(lines)
     )
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            max_tokens=500,
+            max_tokens=150,
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a strict local-news editor. Write natural, factual English headlines.",
+                    "content": "You are a strict local-news editor. Return only article indices.",
                 },
                 {"role": "user", "content": prompt},
             ],
         )
         raw = (response.choices[0].message.content or "").strip()
         data = json.loads(raw)
-        items = data.get("items")
-        if not isinstance(items, list):
-            raise ValueError("Digest ranking response has no items list")
+        indices = data.get("indices")
+        if not isinstance(indices, list):
+            raise ValueError("Digest ranking response has no indices list")
 
-        selected_pairs = []
-        used_indices = set()
-
-        for item in items:
-            if not isinstance(item, dict):
-                continue
+        selected = []
+        used = set()
+        for value in indices:
             try:
-                idx = int(item.get("index")) - 1
+                idx = int(value) - 1
             except (TypeError, ValueError):
                 continue
-            if not (0 <= idx < len(rows)) or idx in used_indices:
+            if not (0 <= idx < len(rows)) or idx in used:
                 continue
-
-            headline = _clean_headline(item.get("headline"))
-            if not headline:
-                continue
-
-            selected_pairs.append((rows[idx], headline))
-            used_indices.add(idx)
-            if len(selected_pairs) >= max_items:
+            selected.append(rows[idx])
+            used.add(idx)
+            if len(selected) >= max_items:
                 break
 
-        if not selected_pairs:
+        if not selected:
             raise ValueError("Digest ranking returned no valid selections")
 
-        # The LLM is asked to deduplicate, but enforce it deterministically too.
-        selected_pairs = _deduplicate_selected(selected_pairs)
-
-        # Fill missing headlines only after deduplication, preserving row/headline pairing.
-        selected_pairs = [
-            (row, headline or _fallback_headline(row[1], row[2]))
-            for row, headline in selected_pairs
-        ]
-        return selected_pairs
+        return _deduplicate_rows(selected)
 
     except Exception as exc:
         log.warning("Digest ranking failed: %s", exc)
-        fallback = [(row, _fallback_headline(row[1], row[2])) for row in rows[:max_items]]
-        return _deduplicate_selected(fallback)
+        return _deduplicate_rows(rows[:max_items])
+
+
+def _generate_headline(client, row):
+    """Generate a headline for exactly one row, eliminating cross-story pairing risk."""
+    _, title, summary, _, _, _, _ = row
+    prompt = (
+        "Write one concise factual English headline for this ONE news story. "
+        "The headline must describe only this story. Do not mention facts from any "
+        "other story. Normally keep it under 90 characters. Do not add unsupported facts.\n\n"
+        f"SOURCE TITLE: {title}\n"
+        f"ENGLISH SUMMARY: {summary}\n\n"
+        "Return ONLY the headline."
+    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            max_tokens=80,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You write concise factual English news headlines.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+        )
+        headline = _clean_headline(response.choices[0].message.content or "")
+        if headline and headline != "Lower Silesia regional development":
+            return headline
+    except Exception as exc:
+        log.warning("Digest headline generation failed for %r: %s", title[:100], exc)
+
+    return _fallback_headline(title, summary)
+
+
+def _select_and_rank(client, rows, max_items):
+    """Select stories first, then generate each headline from its own row."""
+    selected_rows = _select_rows(client, rows, max_items)
+    return [(row, _generate_headline(client, row)) for row in selected_rows]
 
 
 def _build_message(pairs):
