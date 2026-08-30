@@ -147,27 +147,14 @@ def _near_duplicate(row_a, row_b):
 
 
 def _history_duplicate(row, history_row):
-    """Use a stricter test when suppressing a story already covered on a prior day."""
+    """Suppress only exact repeats deterministically; let the editor judge updates."""
     if row[3] and row[3] == history_row[3]:
         return True
-
-    title_a = row[1].strip().lower()
-    title_b = history_row[1].strip().lower()
-    if title_a == title_b:
-        return True
-
-    a = _token_set(title_a)
-    b = _token_set(title_b)
-    if not a or not b:
-        return False
-
-    overlap = len(a & b) / min(len(a), len(b))
-    jaccard = len(a & b) / len(a | b)
-    return overlap >= 0.90 and jaccard >= 0.70
+    return row[1].strip().lower() == history_row[1].strip().lower()
 
 
 def _remove_recent_duplicates(rows, history):
-    """Remove strong repeats of stories already covered in recent daily digests."""
+    """Remove exact repeats of stories already covered in recent daily digests."""
     if not history:
         return rows
 
@@ -221,7 +208,7 @@ def _select_rows(client, rows, max_items, history=None):
         )
 
     history_lines = []
-    for i, row in enumerate(history or [], 1):
+    for _, row in enumerate(history or [], 1):
         _, title, _, _, source, date, _ = row
         history_lines.append(f"- {title} | {source} | {date}")
     history_block = "\n".join(history_lines) if history_lines else "(none)"
@@ -407,6 +394,10 @@ def maybe_send_daily_digest(conn, client, session, timeout, chat_id, dry_run, en
     history = _recent_digest_history(conn)
     rows = _remove_recent_duplicates(rows, history)
     if not rows:
+        conn.execute(
+            "UPDATE digest_articles SET digested_at=CURRENT_TIMESTAMP "
+            "WHERE digested_at IS NULL"
+        )
         _set_sent_today(conn, today)
         log.info("Daily digest: all pending stories were already covered recently")
         return
