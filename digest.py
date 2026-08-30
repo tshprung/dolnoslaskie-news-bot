@@ -13,6 +13,8 @@ TZ = ZoneInfo("Europe/Warsaw")
 
 TELEGRAM_SAFE_LIMIT = 3900
 MAX_HEADLINE_CHARS = 110
+DIGEST_HISTORY_DAYS = 3
+DIGEST_HISTORY_MAX_ROWS = 30
 
 
 def init_digest_db(conn):
@@ -78,6 +80,18 @@ def _pending(conn, max_scan=60):
     ).fetchall()
 
 
+def _recent_digest_history(conn, max_rows=DIGEST_HISTORY_MAX_ROWS):
+    """Return recently consumed digest stories for cross-day duplicate avoidance."""
+    return conn.execute(
+        "SELECT id,title,summary_en,url,source,article_date,sort_epoch "
+        "FROM digest_articles "
+        "WHERE digested_at IS NOT NULL "
+        "AND digested_at >= datetime('now', ?) "
+        "ORDER BY digested_at DESC, sort_epoch DESC LIMIT ?",
+        (f"-{DIGEST_HISTORY_DAYS} days", max_rows),
+    ).fetchall()
+
+
 def _fallback_headline(title, summary):
     """Create a usable English fallback headline from the English summary."""
     text = " ".join(str(summary or "").split()).strip()
@@ -132,6 +146,48 @@ def _near_duplicate(row_a, row_b):
     return overlap >= 0.80 and jaccard >= 0.55
 
 
+def _history_duplicate(row, history_row):
+    """Use a stricter test when suppressing a story already covered on a prior day."""
+    if row[3] and row[3] == history_row[3]:
+        return True
+
+    title_a = row[1].strip().lower()
+    title_b = history_row[1].strip().lower()
+    if title_a == title_b:
+        return True
+
+    a = _token_set(title_a)
+    b = _token_set(title_b)
+    if not a or not b:
+        return False
+
+    overlap = len(a & b) / min(len(a), len(b))
+    jaccard = len(a & b) / len(a | b)
+    return overlap >= 0.90 and jaccard >= 0.70
+
+
+def _remove_recent_duplicates(rows, history):
+    """Remove strong repeats of stories already covered in recent daily digests."""
+    if not history:
+        return rows
+
+    result = []
+    for row in rows:
+        duplicate_of = None
+        for previous in history:
+            if _history_duplicate(row, previous):
+                duplicate_of = previous
+                break
+        if duplicate_of is None:
+            result.append(row)
+        else:
+            log.info(
+                "Digest recent duplicate removed: %r ~= prior %r",
+                row[1][:100], duplicate_of[1][:100],
+            )
+    return result
+
+
 def _deduplicate_rows(rows):
     """Remove obvious duplicate events while preserving ranking order."""
     result = []
@@ -151,8 +207,8 @@ def _deduplicate_rows(rows):
     return result
 
 
-def _select_rows(client, rows, max_items):
-    """Ask the model only which rows to select. Headlines are generated separately."""
+def _select_rows(client, rows, max_items, history=None):
+    """Ask the model which current rows to select, considering recent digest coverage."""
     if not rows:
         return []
 
@@ -163,6 +219,12 @@ def _select_rows(client, rows, max_items):
             f"{i}. TITLE: {title}\nSUMMARY: {summary}\n"
             f"SOURCE: {source}\nDATE: {date}"
         )
+
+    history_lines = []
+    for i, row in enumerate(history or [], 1):
+        _, title, _, _, source, date, _ = row
+        history_lines.append(f"- {title} | {source} | {date}")
+    history_block = "\n".join(history_lines) if history_lines else "(none)"
 
     prompt = (
         "You are the editor of a concise daily local-news brief for a resident "
@@ -175,10 +237,17 @@ def _select_rows(client, rows, max_items):
         "Treat multiple articles about the same underlying event as ONE story. "
         "Never select two articles that report the same event. Choose the strongest "
         "or most informative version.\n\n"
-        f"Select at most {max_items} UNIQUE events in importance order.\n"
+        "The digest already covered the recent stories listed below. Do NOT select "
+        "a current article merely because it is a new article about the same story. "
+        "Select it only when there is a material new development that is useful to "
+        "a resident (for example a decision, result, new restriction, reopening, "
+        "new danger, deadline, or substantial change).\n\n"
+        "RECENTLY COVERED STORIES:\n"
+        f"{history_block}\n\n"
+        f"Select at most {max_items} UNIQUE current events in importance order.\n"
         "Return ONLY valid JSON in exactly this structure:\n"
         '{"indices":[1,4,7]}\n\n'
-        "The indices MUST refer to the numbered articles above. Do not return headlines.\n\n"
+        "The indices MUST refer to the numbered current articles above. Do not return headlines.\n\n"
         + "\n\n".join(lines)
     )
 
@@ -256,9 +325,9 @@ def _generate_headline(client, row):
     return _fallback_headline(title, summary)
 
 
-def _select_and_rank(client, rows, max_items):
+def _select_and_rank(client, rows, max_items, history=None):
     """Select stories first, then generate each headline from its own row."""
-    selected_rows = _select_rows(client, rows, max_items)
+    selected_rows = _select_rows(client, rows, max_items, history=history)
     return [(row, _generate_headline(client, row)) for row in selected_rows]
 
 
@@ -335,7 +404,14 @@ def maybe_send_daily_digest(conn, client, session, timeout, chat_id, dry_run, en
         log.info("Daily digest: no pending stories")
         return
 
-    selected_pairs = _select_and_rank(client, rows, max_items)
+    history = _recent_digest_history(conn)
+    rows = _remove_recent_duplicates(rows, history)
+    if not rows:
+        _set_sent_today(conn, today)
+        log.info("Daily digest: all pending stories were already covered recently")
+        return
+
+    selected_pairs = _select_and_rank(client, rows, max_items, history=history)
     if not selected_pairs:
         log.info("Daily digest: ranking returned no stories")
         return
@@ -346,8 +422,8 @@ def maybe_send_daily_digest(conn, client, session, timeout, chat_id, dry_run, en
         return
 
     log.info(
-        "Daily digest prepared: selected=%d pending=%d chars=%d",
-        len(fitted_pairs), len(rows), len(message),
+        "Daily digest prepared: selected=%d pending=%d history=%d chars=%d",
+        len(fitted_pairs), len(rows), len(history), len(message),
     )
 
     if dry_run:
