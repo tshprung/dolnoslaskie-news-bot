@@ -114,7 +114,7 @@ def test_same_batch_first_wins():
 
 def test_load_dedup_snapshots_respects_window():
     conn = _memory_conn()
-    old = int((datetime.now(timezone.utc) - timedelta(hours=30)).timestamp())
+    old = int((datetime.now(timezone.utc) - timedelta(hours=60)).timestamp())
     conn.execute(
         "INSERT INTO dedup_recent (article_id, title, summary, sort_epoch) VALUES (?,?,?,?)",
         ("old", "t", "s", old),
