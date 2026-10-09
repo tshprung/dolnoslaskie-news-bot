@@ -267,6 +267,22 @@ def should_skip_sponsored(title: str | None, summary: str | None, link: str | No
 def sponsored_skip_reason() -> str:
     return "rss teaser: sponsored/advertorial content"
 
+# Routine football fixture pages are event promotions, not local news.
+ROUTINE_FOOTBALL_EVENT_URL_SKIP = re.compile(
+    r"(?i)^https?://(?:www\\.)?tarczynskiarenawroclaw\\.pl/events/mecz-[^?#]+"
+)
+
+
+def should_skip_routine_football_event(title: str | None, link: str | None) -> bool:
+    """Skip routine football-match event listings from the stadium calendar."""
+    if not link or not isinstance(link, str):
+        return False
+    return bool(ROUTINE_FOOTBALL_EVENT_URL_SKIP.search(link.strip()))
+
+
+def routine_football_event_skip_reason() -> str:
+    return "routine football fixture event listing (not news)"
+
 _HARD_NEWS_SIGNALS = re.compile(
     r"(?is)"
     r"(?:"
