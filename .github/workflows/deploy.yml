@@ -27,7 +27,13 @@ jobs:
             fi
             cd /opt/dolnoslaskie_news
             git remote set-url origin "$REPO_URL"
-            git fetch origin
+            # Recover from a stale/raced remote-tracking ref without deleting the repository.
+            if ! git fetch origin; then
+              echo "Initial fetch failed; retrying after pruning stale origin refs"
+              git remote prune origin || true
+              git update-ref -d refs/remotes/origin/main || true
+              git fetch origin main:refs/remotes/origin/main
+            fi
             git checkout main
             # Local VM edits (e.g. to run.sh) must not block deploy.
             git reset --hard origin/main
