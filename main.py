@@ -14,6 +14,8 @@ from config import (
     LISTICLE_TITLE_SKIP,
     SPORTS_KEYWORDS,
     radio_wroc_ticker_skip_reason,
+    routine_football_event_skip_reason,
+    should_skip_routine_football_event,
     should_skip_radio_wroc_ticker_title,
     should_skip_sponsored,
     should_skip_wroclaw_go_event_url,
@@ -75,6 +77,10 @@ def main():
                 continue
             if should_skip_wroclaw_go_event_url(article.get("link")):
                 log.info("Skipped (%s): %s", wroclaw_go_event_skip_reason(), article["title"][:70])
+                _mark_article_done(conn, article)
+                continue
+            if should_skip_routine_football_event(article.get("title"), article.get("link")):
+                log.info("Skipped (%s): %s", routine_football_event_skip_reason(), article["title"][:70])
                 _mark_article_done(conn, article)
                 continue
             if LISTICLE_TITLE_SKIP.search(article["title"] or ""):
