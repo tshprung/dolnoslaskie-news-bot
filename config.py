@@ -129,8 +129,10 @@ AGGREGATOR_URL_SKIP = re.compile(
     re.IGNORECASE,
 )
 
+# Skip individual listings from the Wrocław GO events calendar, regardless of category.
+# This is deliberately URL-scoped: ordinary news articles about events remain eligible.
 WROCLAW_GO_EVENTS_URL_SKIP = re.compile(
-    r"(?i)https?://(?:www\.)?wroclaw\.pl/go/wydarzenia/(?:teatr|kino|koncert|koncerty|festiwal|festiwale|opera|filharmonia)(?:/|$|[?#])"
+    r"(?i)^https?://(?:www\.)?wroclaw\.pl/go/wydarzenia/"
 )
 
 
