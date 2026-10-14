@@ -22,6 +22,8 @@ from config import (
     sponsored_skip_reason,
     skip_admin_notify_for_article,
     wroclaw_go_event_skip_reason,
+    hala_staroci_event_skip_reason,
+    should_skip_hala_staroci_event,
 )
 from database import get_new_articles, init_db, record_seen_url
 from dedup import deduplicate, is_english_near_duplicate, record_sent_en_snapshot, record_sent_snapshot
@@ -77,6 +79,10 @@ def main():
                 continue
             if should_skip_wroclaw_go_event_url(article.get("link")):
                 log.info("Skipped (%s): %s", wroclaw_go_event_skip_reason(), article["title"][:70])
+                _mark_article_done(conn, article)
+                continue
+            if should_skip_hala_staroci_event(article.get("link")):
+                log.info("Skipped (%s): %s", hala_staroci_event_skip_reason(), article["title"][:70])
                 _mark_article_done(conn, article)
                 continue
             if should_skip_routine_football_event(article.get("title"), article.get("link")):
