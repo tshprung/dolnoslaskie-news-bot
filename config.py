@@ -145,6 +145,21 @@ def should_skip_wroclaw_go_event_url(url: str | None) -> bool:
 def wroclaw_go_event_skip_reason() -> str:
     return "wroclaw.pl GO event listing (not a news article)"
 
+# Skip recurring antiques-market listings; these are shopping events, not useful local news.
+HALA_STAROCI_EVENT_SKIP = re.compile(
+    r"(?i)^https?://(?:www\\.)?halastulecia\\.pl/wydarzenie/gielda-staroci(?:-[^/?#]+)?/?(?:[?#].*)?$"
+)
+
+
+def should_skip_hala_staroci_event(url: str | None) -> bool:
+    if not url or not isinstance(url, str):
+        return False
+    return bool(HALA_STAROCI_EVENT_SKIP.search(url.strip()))
+
+
+def hala_staroci_event_skip_reason() -> str:
+    return "antiques market event listing (not news)"
+
 # DIE ZEIT: print issues /year/issue/… (usually ZEIT+) and year hub zeit.de/2026 (Jahrgang index).
 # Must not match /news/2026-04/… (date slug is not the print volume path).
 ZEIT_ARCHIVE_SKIP_URL = re.compile(
