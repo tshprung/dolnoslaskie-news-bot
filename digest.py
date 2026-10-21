@@ -7,6 +7,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from telegram_bot import send_to_telegram, telegram_html_anchor
+from llm_util import complete
 
 log = logging.getLogger(__name__)
 TZ = ZoneInfo("Europe/Warsaw")
@@ -15,9 +16,13 @@ TELEGRAM_SAFE_LIMIT = 3900
 MAX_HEADLINE_CHARS = 110
 DIGEST_HISTORY_DAYS = 3
 DIGEST_HISTORY_MAX_ROWS = 30
+DIGEST_PENDING_MAX_AGE_HOURS = 48
 
 
 def init_digest_db(conn):
+    # Serialize the additive migration when collection and delivery start together.
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
     conn.execute(
         "CREATE TABLE IF NOT EXISTS digest_articles ("
         "id TEXT PRIMARY KEY, title TEXT NOT NULL, summary_en TEXT NOT NULL, "
@@ -28,6 +33,16 @@ def init_digest_db(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_digest_articles_pending "
         "ON digest_articles(digested_at, sort_epoch)"
+    )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(digest_articles)")}
+    if "status" not in columns:
+        conn.execute("ALTER TABLE digest_articles ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'")
+        # Legacy rows cannot distinguish published articles from discarded ones.
+        conn.execute("UPDATE digest_articles SET status='published' WHERE digested_at IS NOT NULL")
+    if "status_reason" not in columns:
+        conn.execute("ALTER TABLE digest_articles ADD COLUMN status_reason TEXT")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_digest_articles_status ON digest_articles(status, sort_epoch)"
     )
     conn.commit()
 
@@ -68,13 +83,12 @@ def _set_sent_today(conn, today: str):
         "ON CONFLICT(k) DO UPDATE SET v=excluded.v",
         (today,),
     )
-    conn.commit()
 
 
 def _pending(conn, max_scan=60):
     return conn.execute(
         "SELECT id,title,summary_en,url,source,article_date,sort_epoch "
-        "FROM digest_articles WHERE digested_at IS NULL "
+        "FROM digest_articles WHERE status='pending' "
         "ORDER BY sort_epoch DESC LIMIT ?",
         (max_scan,),
     ).fetchall()
@@ -85,7 +99,7 @@ def _recent_digest_history(conn, max_rows=DIGEST_HISTORY_MAX_ROWS):
     return conn.execute(
         "SELECT id,title,summary_en,url,source,article_date,sort_epoch "
         "FROM digest_articles "
-        "WHERE digested_at IS NOT NULL "
+        "WHERE status='published' AND digested_at IS NOT NULL "
         "AND digested_at >= datetime('now', ?) "
         "ORDER BY digested_at DESC, sort_epoch DESC LIMIT ?",
         (f"-{DIGEST_HISTORY_DAYS} days", max_rows),
@@ -209,8 +223,8 @@ def _select_rows(client, rows, max_items, history=None):
 
     history_lines = []
     for _, row in enumerate(history or [], 1):
-        _, title, _, _, source, date, _ = row
-        history_lines.append(f"- {title} | {source} | {date}")
+        _, title, summary, _, source, date, _ = row
+        history_lines.append(f"- {title} | {source} | {date}\n  Covered facts: {summary}")
     history_block = "\n".join(history_lines) if history_lines else "(none)"
 
     prompt = (
@@ -222,6 +236,8 @@ def _select_rows(client, rows, max_items, history=None):
         "local events. Deprioritize celebrity, generic national politics, sports, "
         "trivial crime, advertising, and low-impact human-interest stories.\n\n"
         "Treat multiple articles about the same underlying event as ONE story. "
+        "Prefer the latest verified status or outcome, including a reopening or resolved outage, "
+        "over an earlier report of the same incident. "
         "Never select two articles that report the same event. Choose the strongest "
         "or most informative version.\n\n"
         "The digest already covered the recent stories listed below. Do NOT select "
@@ -239,7 +255,7 @@ def _select_rows(client, rows, max_items, history=None):
     )
 
     try:
-        response = client.chat.completions.create(
+        response = complete(client, "digest_selection",
             model="gpt-4o-mini",
             max_tokens=150,
             messages=[
@@ -259,10 +275,9 @@ def _select_rows(client, rows, max_items, history=None):
         selected = []
         used = set()
         for value in indices:
-            try:
-                idx = int(value) - 1
-            except (TypeError, ValueError):
+            if type(value) is not int:
                 continue
+            idx = value - 1
             if not (0 <= idx < len(rows)) or idx in used:
                 continue
             selected.append(rows[idx])
@@ -270,14 +285,14 @@ def _select_rows(client, rows, max_items, history=None):
             if len(selected) >= max_items:
                 break
 
-        if not selected:
+        if indices and not selected:
             raise ValueError("Digest ranking returned no valid selections")
 
         return _deduplicate_rows(selected)
 
     except Exception as exc:
         log.warning("Digest ranking failed: %s", exc)
-        return _deduplicate_rows(rows[:max_items])
+        return _deduplicate_rows(rows)[:max_items]
 
 
 def _generate_headline(client, row):
@@ -292,7 +307,7 @@ def _generate_headline(client, row):
         "Return ONLY the headline."
     )
     try:
-        response = client.chat.completions.create(
+        response = complete(client, "digest_headline",
             model="gpt-4o-mini",
             max_tokens=80,
             messages=[
@@ -371,7 +386,20 @@ def _fit_message(selected_pairs):
             shortened = raw_summary[: max(1, available - 3)].rstrip() + "..."
 
         message = header + html.escape(shortened, quote=False) + suffix
-        return message, pairs
+        if len(message) > TELEGRAM_SAFE_LIMIT:
+            # Escaping '&' or '<' expands the text. Fit the encoded message, not
+            # just the raw summary; never record an oversize post as delivered.
+            raw_summary = str(summary or "")
+            lo, hi = 0, len(raw_summary)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                candidate = header + html.escape(raw_summary[:mid], quote=False) + "..." + suffix
+                if len(candidate) <= TELEGRAM_SAFE_LIMIT:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            message = header + html.escape(raw_summary[:lo], quote=False) + "..." + suffix
+        return (message, pairs) if len(message) <= TELEGRAM_SAFE_LIMIT else (None, [])
 
     return None, []
 
@@ -385,25 +413,30 @@ def maybe_send_daily_digest(conn, client, session, timeout, chat_id, dry_run, en
     if not _digest_hour_reached(hour) or _already_sent_today(conn, today):
         return
 
+    if not dry_run:
+        with conn:
+            conn.execute(
+                "UPDATE digest_articles SET status='expired', status_reason='older than 48 hours' "
+                "WHERE status='pending' AND sort_epoch < ?",
+                (int(now.timestamp()) - DIGEST_PENDING_MAX_AGE_HOURS * 3600,),
+            )
     rows = _pending(conn)
     if not rows:
-        _set_sent_today(conn, today)
+        # Collection may recover later today; an empty queue is not a sent digest.
         log.info("Daily digest: no pending stories")
         return
 
     history = _recent_digest_history(conn)
+    scanned_rows = rows
     rows = _remove_recent_duplicates(rows, history)
-    if not rows:
-        conn.execute(
-            "UPDATE digest_articles SET digested_at=CURRENT_TIMESTAMP "
-            "WHERE digested_at IS NULL"
-        )
-        _set_sent_today(conn, today)
-        log.info("Daily digest: all pending stories were already covered recently")
-        return
-
     selected_pairs = _select_and_rank(client, rows, max_items, history=history)
+    selected_ids = {row[0] for row, _ in selected_pairs}
+    excluded_ids = [row[0] for row in scanned_rows if row[0] not in selected_ids]
     if not selected_pairs:
+        if not dry_run:
+            with conn:
+                _exclude_rows(conn, excluded_ids)
+            # Do not seal the day: a later collection may contain useful stories.
         log.info("Daily digest: ranking returned no stories")
         return
 
@@ -425,15 +458,27 @@ def maybe_send_daily_digest(conn, client, session, timeout, chat_id, dry_run, en
         send_to_telegram(session, message, chat_id=chat_id, timeout=timeout)
     except Exception:
         log.exception("Daily digest delivery failed")
-        return
+        raise
 
-    conn.execute(
-        "UPDATE digest_articles SET digested_at=CURRENT_TIMESTAMP WHERE digested_at IS NULL"
-    )
-    _set_sent_today(conn, today)
-    conn.commit()
+    with conn:
+        conn.executemany(
+            "UPDATE digest_articles SET status='published', digested_at=CURRENT_TIMESTAMP "
+            "WHERE id=? AND status='pending'",
+            [(row[0],) for row, _ in fitted_pairs],
+        )
+        _exclude_rows(conn, excluded_ids)
+        _set_sent_today(conn, today)
 
     log.info(
-        "Daily digest sent: selected=%d consumed=%d chars=%d",
-        len(fitted_pairs), len(rows), len(message),
+        "Daily digest sent: published=%d excluded=%d scanned=%d chars=%d",
+        len(fitted_pairs), len(excluded_ids), len(scanned_rows), len(message),
     )
+
+
+def _exclude_rows(conn, article_ids):
+    conn.executemany(
+        "UPDATE digest_articles SET status='excluded', status_reason='editor or recent duplicate' "
+        "WHERE id=? AND status='pending'",
+        [(article_id,) for article_id in article_ids],
+    )
+

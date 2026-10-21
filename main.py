@@ -1,3 +1,4 @@
+import argparse
 import logging
 import os
 import sqlite3
@@ -26,11 +27,11 @@ from config import (
     should_skip_hala_staroci_event,
 )
 from database import get_new_articles, init_db, record_seen_url
-from dedup import deduplicate, is_english_near_duplicate, record_sent_en_snapshot, record_sent_snapshot
 from digest import init_digest_db, maybe_send_daily_digest, store_digest_article
 from http_util import make_http_session, request_timeout
 from summarize import openai_client, summarize_in_english
 from telegram_bot import notify_admin
+from retry_queue import clear_retry, record_retry, retryable_summary_failure
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ log = logging.getLogger(__name__)
 def _mark_article_done(conn: sqlite3.Connection, article: dict) -> None:
     conn.execute("INSERT OR IGNORE INTO seen_articles (id) VALUES (?)", (article["id"],))
     record_seen_url(conn, article.get("url_norm", ""))
+    clear_retry(conn, article.get("url_norm", ""))
     conn.commit()
 
 
@@ -55,20 +57,35 @@ def _digest_config():
     return enabled, max(0, min(23, hour)), max_items
 
 
-def main():
+def _deliver_digest(conn, client, session, timeout):
+    enabled, hour, max_items = _digest_config()
+    maybe_send_daily_digest(
+        conn, client, session, timeout, CHANNEL_ID, DRY_RUN, enabled, hour, max_items,
+    )
+
+
+def main(mode="all"):
     conn = init_db()
     init_digest_db(conn)
     session = make_http_session()
     to = request_timeout()
     client: OpenAI = openai_client()
 
+    if mode == "digest":
+        try:
+            _deliver_digest(conn, client, session, to)
+        finally:
+            conn.close()
+        return
+
     if not ADMIN_TELEGRAM_ID:
         log.warning("ADMIN_TELEGRAM_ID is unset — failed articles will not DM you")
 
     new_articles = get_new_articles(conn, session=session, timeout=to)
-    new_articles.sort(key=lambda a: a["sort_key"])
-    new_articles = deduplicate(conn, new_articles)
-    log.info("Found %s new articles after deduplication", len(new_articles))
+    # Exact IDs/URLs are filtered during collection. Keep related reports so the
+    # daily editor can choose the latest outcome rather than lose useful updates.
+    new_articles.sort(key=lambda a: a["sort_key"], reverse=True)
+    log.info("Found %s new articles for editorial review", len(new_articles))
     queued_count = 0
 
     for article in new_articles:
@@ -108,6 +125,9 @@ def main():
 
             summary, skip_reason = summarize_in_english(client, session, to, article)
             if summary is None:
+                if retryable_summary_failure(skip_reason):
+                    record_retry(conn, article["url_norm"], skip_reason)
+                    continue
                 if skip_reason:
                     log.info("Skipped (%s): %s", skip_reason, article["title"][:70])
                     if not skip_admin_notify_for_article(article, skip_reason):
@@ -117,16 +137,8 @@ def main():
                 _mark_article_done(conn, article)
                 continue
 
-            dup_en, dup_detail = is_english_near_duplicate(conn, article["id"], summary, article["sort_key"])
-            if dup_en:
-                log.info("Skipped (%s): %s", dup_detail, article["title"][:70])
-                _mark_article_done(conn, article)
-                continue
-
             store_digest_article(conn, article, summary)
             _mark_article_done(conn, article)
-            record_sent_snapshot(conn, article)
-            record_sent_en_snapshot(conn, article["id"], summary, article["sort_key"])
             conn.commit()
             log.info("Queued for daily digest: %s", article["title"][:70])
             queued_count += 1
@@ -137,23 +149,22 @@ def main():
             time.sleep(1)
         except Exception as e:
             log.exception("Error on article %s", article["id"])
+            record_retry(conn, article["url_norm"], f"runtime error: {type(e).__name__}")
             try:
                 if not skip_admin_notify_for_article(article):
                     notify_admin(session, article, f"runtime error: {e}", ADMIN_TELEGRAM_ID, to)
             except Exception:
                 pass
 
-    digest_enabled, digest_hour, digest_max_items = _digest_config()
     try:
-        maybe_send_daily_digest(
-            conn, client, session, to, CHANNEL_ID,
-            DRY_RUN, digest_enabled, digest_hour, digest_max_items,
-        )
-    except Exception:
-        log.exception("Daily digest delivery failed")
-
-    conn.close()
+        if mode == "all":
+            _deliver_digest(conn, client, session, to)
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=("all", "collect", "digest"), default="all")
+    main(parser.parse_args().mode)
+

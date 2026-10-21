@@ -174,6 +174,22 @@ def test_stage2_polish_then_still_polish_uses_rewrite(monkeypatch):
     assert client.chat.completions.create.call_count == 4
 
 
+def test_summary_receives_publication_date_and_practical_detail_context(monkeypatch):
+    monkeypatch.setattr("summarize.fetch_article_body", lambda *_a: (
+        'Wrocław: jutro przywrócony zostanie ruch tramwajów na ulicy Legnickiej.', None))
+    article = {
+        'link': 'https://example.com/trams', 'title': 'Wrocław: powrót tramwajów',
+        'summary': '', 'date': '21.10.2026 10:00',
+    }
+    client = _client_with_responses('GO', 'Trams will return to Legnicka Street in Wrocław on 22 October.')
+    result, reason = summarize_in_english(client, MagicMock(), (1, 2), article)
+    assert result and reason is None
+    prompt = client.chat.completions.create.call_args.kwargs['messages'][1]['content']
+    assert '21.10.2026 10:00' in prompt
+    assert 'Resolve relative dates' in prompt
+    assert 'affected people and practical action' in prompt
+
+
 def test_berlin_geo_mismatch(monkeypatch):
     body = (
         "Großbrand am Brandenburger Tor in Berlin; Feuerwehr im Einsatz. "
@@ -190,3 +206,4 @@ def test_berlin_geo_mismatch(monkeypatch):
     out, reason = summarize_in_english(client, MagicMock(), (1, 2), article)
     assert out is not None
     assert reason is None
+

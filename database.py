@@ -9,6 +9,9 @@ from zoneinfo import ZoneInfo
 
 import feedparser
 
+from http_util import make_http_session, request_timeout
+from retry_queue import init_retry_db, record_retry, retry_due
+
 from config import (
     DB_PATH,
     DISPLAY_TZ,
@@ -126,7 +129,8 @@ def normalize_article_url(url: str) -> str:
 
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    init_retry_db(conn)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS seen_articles "
         "(id TEXT PRIMARY KEY, sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
@@ -227,6 +231,9 @@ def _mark_stale_rss_item(conn: sqlite3.Connection, article_id: str, url_norm: st
     conn.execute("INSERT OR IGNORE INTO seen_articles (id) VALUES (?)", (article_id,))
     record_seen_url(conn, url_norm)
     record_age_skipped_url(conn, url_norm)
+    # Do not hold SQLite's writer lock across the next source's network request;
+    # the independent digest process must be able to publish the existing queue.
+    conn.commit()
 
 
 def _resolve_rss_entry_publish_utc(
@@ -261,6 +268,7 @@ def _scrape_listing_sources(
     import random
     import time as _time
 
+    init_retry_db(conn)
     last_s = _kv_get(conn, "last_scrape_sources_epoch")
     last_epoch = int(last_s) if (last_s and last_s.isdigit()) else 0
     now_epoch = int(now_utc.timestamp())
@@ -299,6 +307,8 @@ def _scrape_listing_sources(
                 ).fetchone()
                 if id_done or url_done or is_age_skipped_url(conn, url_norm):
                     continue
+                if not retry_due(conn, url_norm):
+                    continue
                 urls_in_batch.add(url_norm)
                 pub_utc: datetime | None = None
                 if key == "echo24":
@@ -306,8 +316,7 @@ def _scrape_listing_sources(
                 else:
                     pub_utc = article_html_fetch_published_utc(session, link, timeout)
                 if pub_utc is None:
-                    log.warning("Scrape source %s: no publish date for %s; skipping", key, link)
-                    _mark_stale_rss_item(conn, link, url_norm)
+                    record_retry(conn, url_norm, f"{key}: publication date unavailable")
                     continue
                 if pub_utc < min_dt:
                     _mark_stale_rss_item(conn, link, url_norm)
@@ -349,6 +358,9 @@ def get_new_articles(conn, session=None, timeout: tuple | None = None):
     """
     Returns new articles from RSS, plus hourly-gated SCRAPE_SOURCES listing scrapes if session+timeout provided.
     """
+    init_retry_db(conn)
+    session = session if session is not None else make_http_session()
+    timeout = timeout if timeout is not None else request_timeout()
     new_articles = []
     tz = ZoneInfo(DISPLAY_TZ)
     urls_in_batch: set[str] = set()
@@ -356,7 +368,13 @@ def get_new_articles(conn, session=None, timeout: tuple | None = None):
     min_dt = now_utc - timedelta(hours=int(MAX_ARTICLE_AGE_HOURS))
     for feed_url in FEEDS:
         try:
-            feed = feedparser.parse(feed_url)
+            response = session.get(feed_url, timeout=timeout)
+            response.raise_for_status()
+            feed = feedparser.parse(response.content)
+            log.info("RSS source: url=%s entries=%d malformed=%s",
+                     feed_url, len(feed.entries), bool(getattr(feed, "bozo", False)))
+            if not feed.entries:
+                log.warning("RSS source returned no entries: %s", feed_url)
             for entry in feed.entries:
                 article_id = entry.get("id") or entry.get("link")
                 if not article_id:
@@ -371,11 +389,12 @@ def get_new_articles(conn, session=None, timeout: tuple | None = None):
                 ).fetchone()
                 if exists or url_done or url_norm in urls_in_batch or is_age_skipped_url(conn, url_norm):
                     continue
+                if not retry_due(conn, url_norm):
+                    continue
                 urls_in_batch.add(url_norm)
                 dt = _resolve_rss_entry_publish_utc(entry, link, session, timeout)
                 if dt is None:
-                    log.warning("RSS item has no publish date (%s); skipping", link)
-                    _mark_stale_rss_item(conn, article_id, url_norm)
+                    record_retry(conn, url_norm, "RSS publication date unavailable")
                     continue
                 if dt < min_dt:
                     log.info(
@@ -412,3 +431,4 @@ def get_new_articles(conn, session=None, timeout: tuple | None = None):
 
     conn.commit()
     return new_articles
+

@@ -9,7 +9,7 @@ set +a
 flock -n /tmp/dolnoslaskie_news.lock bash -lc '
   start=$(date +%s)
   timeout --signal=TERM --kill-after=30s 15m \
-    /opt/dolnoslaskie_news/venv/bin/python /opt/dolnoslaskie_news/main.py >> /opt/dolnoslaskie_news/bot.log 2>&1
+    /opt/dolnoslaskie_news/venv/bin/python /opt/dolnoslaskie_news/main.py --mode collect >> /opt/dolnoslaskie_news/bot.log 2>&1
   rc=$?
   dur=$(( $(date +%s) - start ))
   if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
@@ -20,4 +20,15 @@ flock -n /tmp/dolnoslaskie_news.lock bash -lc '
   if [ "$dur" -gt 300 ]; then
     sleep 300
   fi
+  exit "$rc"
 '
+collection_rc=$?
+# Backwards-compatible fallback for existing cron installations. Delivery still
+# runs if collection fails, times out, or is already locked by another run.
+bash /opt/dolnoslaskie_news/run_digest.sh
+digest_rc=$?
+if [ "$collection_rc" -ne 0 ]; then
+  exit "$collection_rc"
+fi
+exit "$digest_rc"
+

@@ -43,7 +43,7 @@ nano .env   # TELEGRAM_*, OPENAI_API_KEY, DB_PATH=/opt/dolnoslaskie_news/seen.db
 chmod +x run.sh
 ```
 
-For a **public** repo you can still bootstrap with a normal `git clone` into `/opt/german_news`; for **private** repos the Action (or a VM deploy key) handles auth.
+For a **public** repo you can also bootstrap with a normal `git clone` into `/opt/dolnoslaskie_news`; for **private** repos the Action (or a VM deploy key) handles auth.
 
 ## 5. Cron
 
@@ -58,6 +58,7 @@ Recommended schedule (every 30 minutes, on the **:20** and **:50** of each hour 
 ```cron
 CRON_TZ=Europe/Warsaw
 20,50 * * * * /opt/dolnoslaskie_news/run.sh
+5,35 * * * * /opt/dolnoslaskie_news/run_digest.sh
 ```
 
 The normal delivery mode is a **daily digest**, controlled by:
@@ -68,7 +69,11 @@ NEWS_DIGEST_HOUR=19
 NEWS_DIGEST_MAX_ITEMS=10
 ```
 
-The digest is sent on the first run at or after the configured hour. Accepted stories are stored in SQLite until the daily brief is sent; they are not posted individually.
+The digest is sent on the first delivery run at or after the configured hour. The independent delivery schedule above also retries a failed send every 30 minutes. Separate locks allow delivery while collection is still running. Both commands load `.env` and use a watchdog.
+
+`run.sh` collects stories and then invokes `run_digest.sh` as a fallback even if collection fails or times out. Existing cron installations therefore keep delivering after an upgrade, but add the second line above to keep delivery independent of slow collection. A separate delivery lock and a per-day database record prevent simultaneous scheduled runs from sending the same brief.
+
+For manual operation, use `python main.py --mode collect` or `python main.py --mode digest`. With no arguments, `main.py` retains its collect-then-deliver behavior. Accepted stories are queued in SQLite and are not posted individually.
 
 **Important:** this means changing cron to every 30 minutes improves collection freshness, but it does **not** create 30-minute Telegram notifications. The user still receives one daily brief.
 
@@ -83,6 +88,27 @@ After deploy: `chmod +x /opt/dolnoslaskie_news/run_weekly_announce.sh`. Tune wit
 
 Logs: `/opt/dolnoslaskie_news/bot.log`.
 
+### Upgrading and checking delivery
+
+The workflow runs Python tests and shell syntax checks for pull requests and pushes. Deployment runs only for a successful push to `main`, and checks out the tested commit. The PR itself does not change the running VM.
+
+Back up SQLite before upgrading, for example with `sqlite3 /opt/dolnoslaskie_news/seen.db ".backup '/opt/dolnoslaskie_news/seen-before-reliability.db'"`. The first run performs an additive migration. Pending stories are preserved. Historical rows already marked digested are migrated as published because older versions did not record which stories were actually sent; their true publication status cannot be reconstructed automatically.
+
+New queue states are `pending`, `published`, `excluded`, and `expired`. Only published rows receive `digested_at` and appear in recent coverage history. Articles considered but declined by the editor are excluded. Selected articles removed for Telegram length, and articles outside the 60-item scan, remain pending. Pending stories expire 48 hours after publication. An empty queue or a legitimate empty editor selection does not close delivery for the day, allowing later useful stories to be sent.
+
+Exact ID/URL deduplication remains in collection. Related reports are now compared by the final editor, with the newest reports first and prior published facts included as context. This preserves material updates but may increase summarization calls compared with the old aggressive lexical filter; watch token usage after rollout.
+
+Missing publication dates and temporary body-fetch failures are retried up to three times, 30 minutes apart. They are recorded in `article_retries` rather than the year-long stale-URL cache. Confirmed old stories still use the stale cache. Exhausted retries are logged for inspection. Previously cached unknown-date failures cannot be distinguished from confirmed old stories; investigate individual URLs rather than clearing the whole stale cache.
+
+Useful health signals in `bot.log` include `RSS source`, `Article retry`, `Daily digest sent`, and `OpenAI usage`. The last includes actual reported token counts by stage. Delivery exceptions exit nonzero so an external scheduler can alert. To check the latest successful brief:
+
+```bash
+sqlite3 /opt/dolnoslaskie_news/seen.db "SELECT v FROM bot_kv WHERE k='daily_digest_date';"
+sqlite3 /opt/dolnoslaskie_news/seen.db "SELECT status,count(*) FROM digest_articles GROUP BY status;"
+```
+
+Configure your VM monitoring to alert if no successful brief appears after the expected delivery window, or if all RSS sources fail. Empty news days can be legitimate; use source health to distinguish quiet coverage from collection failure. Telegram delivery and SQLite cannot share a transaction: a process killed after Telegram accepts a message but before SQLite commits can still cause a repeat. Automatic HTTP retries are disabled for Telegram POSTs to avoid blindly replaying ambiguous sends.
+
 ## 6. OpenAI
 
 Reuse the same **OpenAI** account/key as the Polish bot or a dedicated key — set `OPENAI_API_KEY` in `.env`.
@@ -90,3 +116,6 @@ Reuse the same **OpenAI** account/key as the Polish bot or a dedicated key — s
 ## 7. Feeds
 
 RSS list is in `config.py` (`FEEDS`). If a feed 404s or blocks your IP, remove or replace it.
+
+The present source list and editorial audience still lean toward Wrocław. Before expanding coverage, decide whether the brief should prioritize a Wrocław resident or balance the whole województwo. Use a small labelled sample of real articles to evaluate include/exclude decisions, factual summaries, duplicated reports, and material updates. In particular, include an outage followed by restoration, a transport deadline, a quiet day, and useful reports from outside Wrocław. Keep source links and publication dates in the sample and rerun the evaluation when changing prompts or models.
+

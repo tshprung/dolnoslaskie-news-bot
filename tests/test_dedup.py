@@ -135,8 +135,8 @@ def test_english_dedup_catches_zoo_dodo_cross_source_nine_hours_apart():
         "CREATE TABLE dedup_recent_en ("
         "article_id TEXT PRIMARY KEY, summary_en TEXT NOT NULL, sort_epoch INTEGER NOT NULL)"
     )
-    t1 = datetime(2026, 6, 16, 9, 27, tzinfo=timezone.utc)
-    t2 = datetime(2026, 6, 16, 18, 3, tzinfo=timezone.utc)
+    t2 = datetime.now(timezone.utc)
+    t1 = t2 - timedelta(hours=9)
     en1 = (
         "Fundacja ZOO Wrocław – DODO, established by ZOO Wrocław in 2016, marks a decade of efforts "
         "to save endangered species worldwide. The foundation supports projects in Europe, Africa, and Asia."
@@ -149,3 +149,4 @@ def test_english_dedup_catches_zoo_dodo_cross_source_nine_hours_apart():
     dup, detail = is_english_near_duplicate(conn, "wroclaw-dodo", en2, t2)
     assert dup is True
     assert detail
+
