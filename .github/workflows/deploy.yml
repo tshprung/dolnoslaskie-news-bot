@@ -1,6 +1,7 @@
 name: Deploy Dolnoslaskie bot to VM
 
 on:
+  pull_request:
   push:
     branches: [main]
 
@@ -8,7 +9,21 @@ permissions:
   contents: read
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pytest tests -q
+      - run: bash -n run.sh run_digest.sh run_weekly_announce.sh setup.sh
+
   deploy:
+    needs: test
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH
@@ -36,9 +51,11 @@ jobs:
             fi
             git checkout main
             # Local VM edits (e.g. to run.sh) must not block deploy.
-            git reset --hard origin/main
+            # Deploy the exact revision that passed this workflow's tests.
+            git reset --hard ${{ github.sha }}
             git clean -fd
             python3 -m venv venv || true
             ./venv/bin/pip install -q -r requirements.txt
-            chmod +x run.sh || true
+            chmod +x run.sh run_digest.sh run_weekly_announce.sh
             echo "Deploy done at $(date)"
+

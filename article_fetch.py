@@ -32,7 +32,6 @@ def _trim_boilerplate(text: str) -> str:
                 "anmelden",
                 "registrieren",
                 "abonnement",
-                "abo",
                 "jetzt testen",
                 "mehr zum thema",
                 "lesen sie auch",
@@ -481,3 +480,4 @@ def fetch_article_image_url(
     except Exception as e:
         log.info("No image extracted for %s (%s)", url, e)
         return None
+

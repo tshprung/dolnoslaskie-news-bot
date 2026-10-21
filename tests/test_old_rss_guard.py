@@ -1,5 +1,6 @@
 import sqlite3
 import time
+from unittest.mock import MagicMock
 from datetime import datetime, timedelta, timezone
 
 import database
@@ -46,7 +47,8 @@ def test_skips_and_marks_stale_rss_items(monkeypatch):
     monkeypatch.setattr(database.feedparser, "parse", lambda _url: _Feed(entries))
 
     c = _conn()
-    out = database.get_new_articles(c)
+    monkeypatch.setattr(database, "SCRAPE_SOURCES", [])
+    out = database.get_new_articles(c, session=MagicMock(), timeout=(1, 2))
     ids = {a["id"] for a in out}
     assert "new1" in ids
     assert "old1" not in ids
@@ -54,3 +56,4 @@ def test_skips_and_marks_stale_rss_items(monkeypatch):
     # Old should be marked seen so it won't reappear next run.
     row = c.execute("SELECT 1 FROM seen_articles WHERE id='old1'").fetchone()
     assert row is not None
+

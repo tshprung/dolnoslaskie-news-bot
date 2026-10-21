@@ -18,7 +18,9 @@ def make_http_session() -> Session:
         total=HTTP_RETRY_TOTAL,
         backoff_factor=HTTP_RETRY_BACKOFF,
         status_forcelist=HTTP_STATUS_FORCELIST,
-        allowed_methods=frozenset(["GET", "POST", "HEAD"]),
+        # Retrying a Telegram POST after an ambiguous server failure can publish
+        # the same digest twice. Retry collection requests automatically only.
+        allowed_methods=frozenset(["GET", "HEAD"]),
     )
     adapter = HTTPAdapter(max_retries=retries)
     s.mount("https://", adapter)
@@ -28,3 +30,4 @@ def make_http_session() -> Session:
 
 def request_timeout() -> tuple:
     return REQUEST_CONNECT_TIMEOUT, REQUEST_READ_TIMEOUT
+

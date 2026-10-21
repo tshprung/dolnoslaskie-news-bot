@@ -147,7 +147,7 @@ def wroclaw_go_event_skip_reason() -> str:
 
 # Skip recurring antiques-market listings; these are shopping events, not useful local news.
 HALA_STAROCI_EVENT_SKIP = re.compile(
-    r"(?i)^https?://(?:www\\.)?halastulecia\\.pl/wydarzenie/gielda-staroci(?:-[^/?#]+)?/?(?:[?#].*)?$"
+    r"(?i)^https?://(?:www\.)?halastulecia\.pl/wydarzenie/gielda-staroci(?:-[^/?#]+)?/?(?:[?#].*)?$"
 )
 
 
@@ -286,7 +286,7 @@ def sponsored_skip_reason() -> str:
 
 # Routine football fixture pages are event promotions, not local news.
 ROUTINE_FOOTBALL_EVENT_URL_SKIP = re.compile(
-    r"(?i)^https?://(?:www\\.)?tarczynskiarenawroclaw\\.pl/events/mecz-[^?#]+"
+    r"(?i)^https?://(?:www\.)?tarczynskiarenawroclaw\.pl/events/mecz-[^?#]+"
 )
 
 
@@ -433,3 +433,4 @@ HTTP_STATUS_FORCELIST = (502, 503, 504)
 
 OPENAI_TIMEOUT_SEC = 90.0
 OPENAI_MAX_RETRIES = 2
+

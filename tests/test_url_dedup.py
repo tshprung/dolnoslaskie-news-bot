@@ -59,12 +59,15 @@ def test_record_seen_url_blocks_second_id_same_link(monkeypatch):
         "skipped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
     )
 
-    first = get_new_articles(conn)
+    from unittest.mock import MagicMock
+    monkeypatch.setattr("database.SCRAPE_SOURCES", [])
+    first = get_new_articles(conn, session=MagicMock(), timeout=(1, 2))
     assert len(first) == 1
     assert first[0]["id"] == "tag:zeit:1"
 
     record_seen_url(conn, first[0]["url_norm"])
     conn.commit()
 
-    second = get_new_articles(conn)
+    second = get_new_articles(conn, session=MagicMock(), timeout=(1, 2))
     assert len(second) == 0
+
