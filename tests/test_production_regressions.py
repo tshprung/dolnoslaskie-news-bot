@@ -128,3 +128,20 @@ def test_verification_dry_run_leaves_database_unchanged(conn,monkeypatch):
     monkeypatch.setattr(freshness,'fetch_article_body',lambda *_a:('Latest report: all lanes have reopened. '*5,None))
     freshness.refresh_incidents(conn,client_response('{"status":"resolved","summary":""}'),None,(1,2),[incident_row()],dry_run=True)
     assert conn.execute('SELECT status FROM digest_articles').fetchone()[0]=='pending'
+
+
+@pytest.mark.parametrize('title,summary,hours',[
+    ('Truck blocks S5 motorway','The truck is blocking a lane.',7),
+    ('Three villages without water after pipe burst','Water outage may last until 20:00.',13),
+])
+def test_old_alert_cannot_be_revalidated_by_model_guess(conn,monkeypatch,title,summary,hours):
+    row=list(incident_row())
+    row[1],row[2]=title,summary
+    row[6]=int(datetime.now(timezone.utc).timestamp())-hours*3600
+    fetch=MagicMock()
+    monkeypatch.setattr(freshness,'fetch_article_body',fetch)
+    client=MagicMock()
+    assert freshness.refresh_incidents(conn,client,None,(1,2),[tuple(row)])==[]
+    fetch.assert_not_called()
+    client.chat.completions.create.assert_not_called()
+    assert conn.execute('SELECT status FROM digest_articles').fetchone()[0]=='expired'

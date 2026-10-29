@@ -3,7 +3,7 @@ import json
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import datetime,timezone
 from zoneinfo import ZoneInfo
 
 from article_fetch import fetch_article_body
@@ -29,6 +29,20 @@ def latest_reporting(body):
     return body[:8000]
 
 
+def incident_too_old(row,now):
+    """A recently fetched page is not evidence its old incident is still active."""
+    try:
+        published=datetime.fromtimestamp(int(row[6]),tz=timezone.utc)
+        if int(row[6])<=0:
+            published=datetime.strptime(row[5],'%d.%m.%Y %H:%M').replace(tzinfo=ZoneInfo('Europe/Warsaw'))
+    except (ValueError,TypeError,OverflowError):
+        return True
+    text=fold_pl(f'{row[1]} {row[2]}')
+    hours=12 if re.search(r'water|wod|sewage|kanaliz|power|prad',text) else 6
+    age=(now-published).total_seconds()
+    return age>hours*3600 or age < -300
+
+
 def refresh_incidents(conn,client,session,timeout,rows,dry_run=False):
     usable=[]
     now=datetime.now(ZoneInfo('Europe/Warsaw'))
@@ -36,6 +50,12 @@ def refresh_incidents(conn,client,session,timeout,rows,dry_run=False):
     for row in rows:
         if not is_live_incident(row):
             usable.append(row)
+            continue
+        if incident_too_old(row,now):
+            if not dry_run:
+                with conn:
+                    conn.execute("UPDATE digest_articles SET status='expired',status_reason='short-lived alert outside freshness window' WHERE id=? AND status='pending'",(row[0],))
+            log.info('Digest incident expired: outside freshness window id=%s',row[0])
             continue
         if time.monotonic()>=deadline:
             log.warning('Digest incident held: verification time budget exhausted id=%s',row[0])

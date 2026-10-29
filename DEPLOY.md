@@ -125,6 +125,8 @@ The frozen Nasze Miasto category feed has been replaced with regional feeds from
 
 Before publication, short-lived traffic/water/power incident reports are fetched again and verified against the Warsaw delivery time. Superseded source paragraphs are removed. Resolved incidents expire; unknown status, inaccessible articles and verification failures remain pending and are omitted from the current brief. Successful verification replaces the cached summary. This adds a small verification API cost, with a bounded time budget, without sending extra Telegram messages.
 
+Short-lived traffic alerts older than six hours and water/power/sewage alerts older than twelve hours expire before verification. A fresh fetch alone cannot prove an old event is ongoing. Prolonged disruptions need a fresh report; planned works and lasting policy decisions are not subject to these incident windows.
+
 Source checks and unique candidate outcomes are now persisted in SQLite. With `.env` loaded, inspect them using:
 
 ```bash
