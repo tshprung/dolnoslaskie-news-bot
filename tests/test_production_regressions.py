@@ -96,9 +96,11 @@ def test_verification_fetch_failure_does_not_send_cached_alert(conn,monkeypatch)
 def test_verified_active_incident_replaces_cached_advice(conn,monkeypatch):
     monkeypatch.setattr(freshness,'fetch_article_body',lambda *_a:('Current update: work continues until midnight. '*4,None))
     summary='The A4 remains closed until midnight while recovery work continues.'
-    rows=freshness.refresh_incidents(conn,client_response('{"status":"active","summary":"'+summary+'"}'),None,(1,2),[incident_row()])
+    client=client_response('{"status":"active","summary":"'+summary+'"}')
+    rows=freshness.refresh_incidents(conn,client,None,(1,2),[incident_row()])
     assert rows[0][2]==summary
     assert conn.execute('SELECT summary_en FROM digest_articles').fetchone()[0]==summary
+    assert client.chat.completions.create.call_args.kwargs['response_format']=={'type':'json_object'}
 
 
 def test_superseded_reporting_is_removed():
