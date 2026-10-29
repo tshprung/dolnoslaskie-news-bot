@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from telegram_bot import send_to_telegram, telegram_html_anchor
 from llm_util import complete
+from freshness import refresh_incidents
 
 log = logging.getLogger(__name__)
 TZ = ZoneInfo("Europe/Warsaw")
@@ -235,6 +236,10 @@ def _select_rows(client, rows, max_items, history=None):
         "weather, health, education, major regional developments, and important "
         "local events. Deprioritize celebrity, generic national politics, sports, "
         "trivial crime, advertising, and low-impact human-interest stories.\n\n"
+        "Prefer decisions, household costs, deadlines and changes with lasting regional impact. "
+        "Do not fill space with small paving/planting updates or routine court scheduling. "
+        "Preserve proposed versus approved, planned versus operating and allegations versus established facts. "
+        "An empty selection is allowed.\n\n"
         "Treat multiple articles about the same underlying event as ONE story. "
         "Prefer the latest verified status or outcome, including a reopening or resolved outage, "
         "over an earlier report of the same incident. "
@@ -421,6 +426,7 @@ def maybe_send_daily_digest(conn, client, session, timeout, chat_id, dry_run, en
                 (int(now.timestamp()) - DIGEST_PENDING_MAX_AGE_HOURS * 3600,),
             )
     rows = _pending(conn)
+    rows = refresh_incidents(conn,client,session,timeout,rows,dry_run=dry_run)
     if not rows:
         # Collection may recover later today; an empty queue is not a sent digest.
         log.info("Daily digest: no pending stories")

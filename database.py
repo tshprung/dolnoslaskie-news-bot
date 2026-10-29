@@ -11,6 +11,7 @@ import feedparser
 
 from http_util import make_http_session, request_timeout
 from retry_queue import init_retry_db, record_retry, retry_due
+from source_metrics import init_metrics,record_check,source_due,event
 
 from config import (
     DB_PATH,
@@ -131,6 +132,7 @@ def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30)
     init_retry_db(conn)
+    init_metrics(conn)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS seen_articles "
         "(id TEXT PRIMARY KEY, sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
@@ -282,6 +284,9 @@ def _scrape_listing_sources(
         list_url = (src or {}).get("list_url")
         if not key or not list_url:
             continue
+        if not source_due(conn,list_url):
+            continue
+        source_start=len(scraped)
         try:
             html = fetch_listing_html(session, list_url, timeout)
             if key == "24wroclaw":
@@ -331,16 +336,19 @@ def _scrape_listing_sources(
                         "title": it.title or "",
                         "summary": "",
                         "source": key,
+                        "_source_key": list_url,
                         "date": dt_local.strftime("%d.%m.%Y %H:%M"),
                         "sort_key": dt,
                     }
                 )
-                if len(scraped) >= int(SCRAPE_SOURCES_MAX_NEW_URLS):
+                event(conn,scraped[-1],'candidate')
+                if len(scraped)-source_start >= int(SCRAPE_SOURCES_MAX_NEW_URLS):
                     break
-            if len(scraped) >= int(SCRAPE_SOURCES_MAX_NEW_URLS):
-                break
+            record_check(conn,list_url,kind='listing',entries=len(items),candidates=len(scraped)-source_start,
+                         error='no article links extracted' if not items else '')
         except Exception as e:
             log.warning("Scrape source %s failed (%s): %s", key, list_url, e)
+            record_check(conn,list_url,kind='listing',error=type(e).__name__,blocked=getattr(getattr(e,'response',None),'status_code',None)==403)
         # jitter between listing fetches
         if i < len(SCRAPE_SOURCES) - 1:
             jmin = float(SCRAPE_SOURCES_JITTER_MIN_SEC)
@@ -367,6 +375,9 @@ def get_new_articles(conn, session=None, timeout: tuple | None = None):
     now_utc = datetime.now(timezone.utc)
     min_dt = now_utc - timedelta(hours=int(MAX_ARTICLE_AGE_HOURS))
     for feed_url in FEEDS:
+        if not source_due(conn,feed_url):
+            continue
+        feed_start=len(new_articles)
         try:
             response = session.get(feed_url, timeout=timeout)
             response.raise_for_status()
@@ -413,12 +424,19 @@ def get_new_articles(conn, session=None, timeout: tuple | None = None):
                         "title": entry.get("title", ""),
                         "summary": _entry_text_excerpt(entry),
                         "source": feed.feed.get("title", feed_url),
+                        "_source_key": feed_url,
                         "date": dt_local.strftime("%d.%m.%Y %H:%M"),
                         "sort_key": dt,
                     }
                 )
+                event(conn,new_articles[-1],'candidate')
+            dates=[rss_entry_published_utc(entry) for entry in feed.entries]
+            newest=max((d.timestamp() for d in dates if d is not None),default=None)
+            record_check(conn,feed_url,kind='rss',entries=len(feed.entries),candidates=len(new_articles)-feed_start,
+                         newest_epoch=newest,stale=bool(newest and newest<now_utc.timestamp()-14*86400))
         except Exception as e:
             log.error(f"Failed to fetch {feed_url}: {e}")
+            record_check(conn,feed_url,kind='rss',error=type(e).__name__,blocked=getattr(getattr(e,'response',None),'status_code',None)==403)
 
     # Non-RSS scrape sources (hourly gate).
     if session is not None and timeout is not None and SCRAPE_SOURCES:
