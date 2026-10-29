@@ -117,5 +117,23 @@ Reuse the same **OpenAI** account/key as the Polish bot or a dedicated key — s
 
 RSS list is in `config.py` (`FEEDS`). If a feed 404s or blocks your IP, remove or replace it.
 
+### Production audit: October 2026
+
+The VM's October 25–28 logs showed 32–55 candidate-processing attempts per day and 12–27 stories queued. They also showed repeated HTTP 403 responses from TuWrocław and all three listing sources. Local desktop access did not reproduce those blocks. Access denials now back off for 24 hours; no challenge bypass or proxy is used. Wałbrzych24 extraction supports its new `/pl/11_wiadomosci/` layout when access is available.
+
+The frozen Nasze Miasto category feed has been replaced with regional feeds from Legnica.NET, Świdnica24 and Jelonka, all checked from the VM. Listing intake limits are per source. English summaries retain Polish place names without being rejected solely for containing several accented letters.
+
+Before publication, short-lived traffic/water/power incident reports are fetched again and verified against the Warsaw delivery time. Superseded source paragraphs are removed. Resolved incidents expire; unknown status, inaccessible articles and verification failures remain pending and are omitted from the current brief. Successful verification replaces the cached summary. This adds a small verification API cost, with a bounded time budget, without sending extra Telegram messages.
+
+Short-lived traffic alerts older than six hours and water/power/sewage alerts older than twelve hours expire before verification. A fresh fetch alone cannot prove an old event is ongoing. Prolonged disruptions need a fresh report; planned works and lasting policy decisions are not subject to these incident windows.
+
+Source checks and unique candidate outcomes are now persisted in SQLite. With `.env` loaded, inspect them using:
+
+```bash
+venv/bin/python diagnostics.py --days 7
+```
+
+The report shows the latest source response, stale feeds, candidates, readable bodies, retries, rejected stories and queue outcomes. Candidate stages count each URL once; historical rejected-candidate details from before instrumentation cannot be reconstructed completely. Source checks are retained for 30 days.
+
 The present source list and editorial audience still lean toward Wrocław. Before expanding coverage, decide whether the brief should prioritize a Wrocław resident or balance the whole województwo. Use a small labelled sample of real articles to evaluate include/exclude decisions, factual summaries, duplicated reports, and material updates. In particular, include an outage followed by restoration, a transport deadline, a quiet day, and useful reports from outside Wrocław. Keep source links and publication dates in the sample and rerun the evaluation when changing prompts or models.
 

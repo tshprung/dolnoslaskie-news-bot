@@ -17,8 +17,11 @@ FEEDS = [
     "https://www.wroclaw.pl/ua/rss",
     # Not added: wroclaw.pl/sport/rss — channel scope skips sports (wasted fetch/classify).
     # Regional news outlets (RSS confirmed)
-    # Nasze Miasto Wrocław (section feed; root /rss/ hits Cloudflare for bots)
-    "https://wroclaw.naszemiasto.pl/rss/artykuly/1212.xml",
+    # Replaced the frozen Nasze Miasto category feed (last item June 2026).
+    # Regional feeds validated from the production VM, October 2026.
+    "https://www.legnica.net/feed/",
+    "https://swidnica24.pl/feed/",
+    "https://jelonka.com/rss/",
     "https://www.radiowroclaw.pl/articles/rss",
     "https://tuwroclaw.com/rss",
     # Gazeta Wrocławska (RSS exists; pre-skip obvious listicles to reduce cost)
@@ -46,7 +49,7 @@ SCRAPE_SOURCES = [
 ]
 # Gate scraping so RSS can run more often without extra traffic.
 SCRAPE_SOURCES_MIN_INTERVAL_SEC = int(os.environ.get("SCRAPE_SOURCES_MIN_INTERVAL_SEC", "3600"))
-# Per-run cap: avoid bursts if a layout change yields junk links.
+# Per-source cap: one busy listing must not starve subsequent sources.
 SCRAPE_SOURCES_MAX_NEW_URLS = int(os.environ.get("SCRAPE_SOURCES_MAX_NEW_URLS", "25"))
 SCRAPE_SOURCES_JITTER_MIN_SEC = float(os.environ.get("SCRAPE_SOURCES_JITTER_MIN_SEC", "1"))
 SCRAPE_SOURCES_JITTER_MAX_SEC = float(os.environ.get("SCRAPE_SOURCES_JITTER_MAX_SEC", "3"))

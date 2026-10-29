@@ -246,7 +246,7 @@ def fetch_article_body(
         if len(text) >= 200:
             if any(s in text.lower() for s in paywall_signals) and len(text) < 500:
                 log.warning(f"Paywall detected at {url}, ignoring fetched content")
-                return ""
+                return "", "insufficient text (paywall/teaser/login; not enough free content for summary)"
             text = _trim_boilerplate(text)
             log.info(f"Fetched {len(text)} chars (JSON-LD) from {url}")
             return text, None

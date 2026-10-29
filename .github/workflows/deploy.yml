@@ -32,8 +32,14 @@ jobs:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
+          command_timeout: 30m
           script: |
             set -e
+            # Wait for running jobs before replacing their source files.
+            exec 9>/tmp/dolnoslaskie_news.lock
+            flock -w 960 9
+            exec 8>/tmp/dolnoslaskie_news_digest.lock
+            flock -w 360 8
             sudo mkdir -p /opt/dolnoslaskie_news
             sudo chown -R "$USER":"$USER" /opt/dolnoslaskie_news
             REPO_URL="https://x-access-token:${{ github.token }}@github.com/tshprung/dolnoslaskie-news-bot.git"

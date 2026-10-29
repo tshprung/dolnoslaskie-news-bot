@@ -103,13 +103,14 @@ def _looks_like_polish_prose(s: str) -> bool:
     t = (s or "").strip()
     if not t:
         return False
-    if _POLISH_PROSE_MARKERS.search(t):
-        return True
-    # Strong signal: multiple Polish-specific letters outside all-caps tokens (often names).
-    diac = set(re.findall(r"[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]", t))
-    if len(diac) >= 3:
-        return True
-    return False
+    # Polish names are required in English summaries. Accents in Wrocław,
+    # Świdnica or Dolnośląskie therefore cannot identify the prose language.
+    markers = {m.group(0).lower() for m in _POLISH_PROSE_MARKERS.finditer(t)}
+    words = re.findall(r"\b[\w]+\b", t.lower())
+    polish = sum(w in {'jest','są','się','oraz','który','która','został','zostanie',
+                       'mieszkańcy','władze','przez','podczas','na','we','dla'} for w in words)
+    english = sum(w in {'the','and','will','has','have','is','are','with','from','for'} for w in words)
+    return len(markers) >= 2 or (polish >= 3 and english < 2)
 
 
 def _rewrite_summary_to_english(client: OpenAI, polish_line: str) -> str:
@@ -272,6 +273,7 @@ def summarize_in_english(
     if is_zeit_archive_skip_url(article.get("link")):
         return None, zeit_archive_skip_reason()
     body, fetch_err = fetch_article_body(session, article["link"], http_timeout)
+    article['_body_chars'] = len(body or '')
     if body:
         _TEL.body_fetched_chars += len(body)
     fetch_blocked_reason = fetch_err

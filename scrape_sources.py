@@ -364,14 +364,16 @@ def extract_walbrzych24_items(
         soup = BeautifulSoup(html, "html.parser")
         for a in soup.select("a[href]"):
             href = (a.get("href") or "").strip()
-            if not href or "/artykul/" not in href:
+            if not href or not ("/artykul/" in href or "/pl/11_wiadomosci/" in href):
                 continue
             title = a.get_text(" ", strip=True)
             if not title or len(title) < 12:
                 continue
             url = canonical_walbrzych24_article_url(urljoin(base_url, href))
             p = urlparse(url)
-            if not _ARTYKUL_ID_RE.match(p.path or ""):
+            if p.netloc not in {'walbrzych24.com','www.walbrzych24.com'}:
+                continue
+            if not (_ARTYKUL_ID_RE.match(p.path or "") or re.fullmatch(r'/pl/11_wiadomosci/\d+_[^/]+\.html', p.path or '')):
                 continue
             if url in seen:
                 continue

@@ -32,12 +32,14 @@ from http_util import make_http_session, request_timeout
 from summarize import openai_client, summarize_in_english
 from telegram_bot import notify_admin
 from retry_queue import clear_retry, record_retry, retryable_summary_failure
+from source_metrics import event
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 
-def _mark_article_done(conn: sqlite3.Connection, article: dict) -> None:
+def _mark_article_done(conn: sqlite3.Connection, article: dict, reason='prefilter') -> None:
+    event(conn,article,'rejected' if reason!='queued' else 'queued',reason)
     conn.execute("INSERT OR IGNORE INTO seen_articles (id) VALUES (?)", (article["id"],))
     record_seen_url(conn, article.get("url_norm", ""))
     clear_retry(conn, article.get("url_norm", ""))
@@ -124,9 +126,12 @@ def main(mode="all"):
                 continue
 
             summary, skip_reason = summarize_in_english(client, session, to, article)
+            if article.get('_body_chars',0)>0:
+                event(conn,article,'readable')
             if summary is None:
                 if retryable_summary_failure(skip_reason):
                     record_retry(conn, article["url_norm"], skip_reason)
+                    event(conn,article,'retry',skip_reason)
                     continue
                 if skip_reason:
                     log.info("Skipped (%s): %s", skip_reason, article["title"][:70])
@@ -134,11 +139,11 @@ def main(mode="all"):
                         notify_admin(session, article, skip_reason, ADMIN_TELEGRAM_ID, to)
                 else:
                     log.info("Skipped (classifier: SKIP): %s", article["title"][:70])
-                _mark_article_done(conn, article)
+                _mark_article_done(conn, article,skip_reason or 'classifier: SKIP')
                 continue
 
             store_digest_article(conn, article, summary)
-            _mark_article_done(conn, article)
+            _mark_article_done(conn, article,'queued')
             conn.commit()
             log.info("Queued for daily digest: %s", article["title"][:70])
             queued_count += 1
