@@ -78,6 +78,21 @@ def test_same_brief_event_check_runs_even_without_previous_coverage():
     assert digest._filter_covered_events(client, candidates, []) == candidates[:1]
 
 
+def test_explicit_warning_periods_override_inconsistent_semantic_verdicts():
+    history = [row('yesterday', 'Fog warning', 'IMGW issued a fog warning for Lower Silesia from November 5 at 16:00 until November 6 at 11:00.')]
+    candidates = [
+        row('today', 'New warning', 'A fog warning covers Dolnośląskie from November 6 at 18:00 until November 7 at 10:00.'),
+        row('repeat', 'Another outlet', 'IMGW issued a fog alert for Lower Silesia from 6 November at 18:00 until 7 November at 10:00.'),
+        history[0],
+    ]
+    client = client_responses(json.dumps({'decisions': [
+        {'index': 0, 'keep': False, 'reason': 'Same topic as yesterday'},
+        {'index': 1, 'keep': True, 'reason': 'Different publisher'},
+        {'index': 2, 'keep': True, 'reason': 'Repeated warning'},
+    ]}))
+    assert digest._filter_covered_events(client, candidates, history) == candidates[:1]
+
+
 @pytest.mark.parametrize('response', ['bad JSON', '{"decisions":[]}',
     '{"decisions":[{"index":0,"keep":"false","reason":"repeat"}]}'])
 def test_failed_novelty_audit_does_not_consume_queue_or_send(response, monkeypatch):

@@ -353,7 +353,44 @@ def _filter_covered_events(client, rows, history):
             raise ValueError('Invalid digest novelty decision; retry delivery without consuming queue')
         verdicts[index] = item['keep']
         log.info('Digest novelty: id=%s keep=%s reason=%s', rows[index][0], item['keep'], str(item['reason'])[:250])
-    return [r for i, r in enumerate(rows) if verdicts[i]]
+    # Validity periods are concrete facts, not a semantic similarity judgement.
+    # Different overnight fog warnings must not be collapsed into one week-long event.
+    covered_windows = {_fog_warning_window(r) for r in history} - {None}
+    result = []
+    for i, row in enumerate(rows):
+        window = _fog_warning_window(row)
+        if window is not None:
+            keep = window not in covered_windows
+            covered_windows.add(window)
+            log.info('Digest warning window: id=%s keep=%s period=%s', row[0], keep, window)
+        else:
+            keep = verdicts[i]
+        if keep:
+            result.append(row)
+    return result
+
+
+def _fog_warning_window(row):
+    """Identify explicit region-wide warning periods; leave ambiguous text to the editor."""
+    text = str(row[2]).lower()
+    if not ('fog' in text and re.search(r'warning|alert', text)
+            and re.search(r'dolnośląskie|dolnoslaskie|lower silesia', text)):
+        return None
+    months = 'january february march april may june july august september october november december'.split()
+    dates = []
+    pattern = r'\b(' + '|'.join(months) + r')\s+(\d{1,2})(?:st|nd|rd|th)?\b|\b(\d{1,2})(?:st|nd|rd|th)?\s+(' + '|'.join(months) + r')\b'
+    for match in re.finditer(pattern, text):
+        month, day = (match[1], match[2]) if match[1] else (match[4], match[3])
+        if not 1 <= int(day) <= 31:
+            return None
+        date = (months.index(month)+1, int(day))
+        if date not in dates:
+            dates.append(date)
+    if len(dates) != 2:
+        return None
+    year = datetime.fromtimestamp(row[6], TZ).year
+    times = tuple(re.findall(r'\b\d{1,2}:\d{2}\b', text))
+    return (year, tuple(dates), times)
 
 
 def _generate_headline(client, row):
