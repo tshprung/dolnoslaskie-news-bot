@@ -446,7 +446,25 @@ def summarize_in_english(
 
     word_count = len(result.split())
     if word_count > MAX_SUMMARY_WORDS_HARD:
-        return None, f"summary too long ({word_count} words, max {MAX_SUMMARY_WORDS})"
+        log.info('Summary has %s words; attempting one shortening pass', word_count)
+        _TEL.stage2_retries += 1
+        response = call_stage2(
+            date_context + f'Article: {text[:stage2_limit]}\n\n'
+            f'Draft summary: {result}\n\n'
+            f'Shorten the draft to at most {MAX_SUMMARY_WORDS} words in factual English. '
+            'Preserve proposal/approval status, practical dates, locations and units. '
+            'Use only facts supported by the source. Return only the summary, no labels.'
+        )
+        choice = response.choices[0]
+        if choice.finish_reason != 'stop':
+            return None, 'summary shortening did not finish'
+        result = _sanitize_english_summary_line(strip_leading_summary_labels(choice.message.content or ''))
+        if (len(result) < 15 or result.upper().startswith(('SKIP', 'INSUF'))
+                or _is_meta_wordcount_echo(result) or _looks_like_polish_prose(result)):
+            return None, 'summary shortening returned unusable text'
+        word_count = len(result.split())
+        if word_count > MAX_SUMMARY_WORDS_HARD:
+            return None, f"summary too long after shortening ({word_count} words, max {MAX_SUMMARY_WORDS})"
 
     return result, None
 

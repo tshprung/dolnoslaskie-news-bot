@@ -340,8 +340,8 @@ MAX_SUMMARY_WORDS_HARD = 60
 
 # Reduce OpenAI spend by limiting stage2 input size.
 # Default values tuned for local-news blurbs; raise if summaries degrade.
-STAGE2_INPUT_CHARS_DEFAULT = int(os.environ.get("STAGE2_INPUT_CHARS_DEFAULT", "1800"))
-STAGE2_INPUT_CHARS_LONG_BODY = int(os.environ.get("STAGE2_INPUT_CHARS_LONG_BODY", "2300"))
+STAGE2_INPUT_CHARS_DEFAULT = int(os.environ.get("STAGE2_INPUT_CHARS_DEFAULT", "6000"))
+STAGE2_INPUT_CHARS_LONG_BODY = int(os.environ.get("STAGE2_INPUT_CHARS_LONG_BODY", "8000"))
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHANNEL_ID = os.environ["TELEGRAM_CHANNEL_ID"]
@@ -394,6 +394,16 @@ SYSTEM_PROMPT = (
     "When you summarize, write **only** the summary—never prefix with English:, Summary:, or similar labels. "
     "Use Latin script. Keep **every Polish placename in Latin as in the source** (Wrocław, Dolnośląskie). "
     "Paraphrase, no quotes. Use clear, standard English.\n\n"
+    "**Factual precision:** uchwała intencyjna starts a procedure; it is not final merger approval. "
+    "Preserve planned, proposed, approved, operating, and conditional status. Vehicles prepared or "
+    "on standby are not deployed. An expanded facility is not a newly created facility. "
+    "Track installation in an existing project is progress, not the start of construction. "
+    "Attach costs and capacity figures to the correct whole project or component. "
+    "Do not turn an anniversary recap into a newly unveiled policy. "
+    "Identify the specific train/service affected rather than implying all rail services end. "
+    "Preserve units and time periods; do not invent a per-day rate. "
+    "Read through the supplied text for later qualifications or official responses. "
+    "If source passages contradict each other, state the uncertainty or omit the disputed detail.\n\n"
     "Do not translate the administrative term **województwo**; keep it in Latin as **województwo**.\n\n"
     "International/EU: **GO** only when the article explicitly connects it to Dolnośląskie/Wrocław (local officials, local impact). "
     "If it's a generic foreign story with no local tie—SKIP.\n\n"
