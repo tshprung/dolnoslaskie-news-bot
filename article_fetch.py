@@ -13,6 +13,32 @@ _BAD_DEFAULT_ENCODINGS = frozenset({"iso-8859-1", "windows-1252"})
 _MAX_BODY_CHARS = 8000
 
 
+def _publisher_article_body(page_html: str, host: str) -> str:
+    """Use observed publisher content containers, never the surrounding comment stream."""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(page_html, 'html.parser')
+    selectors = {
+        'radiowroclaw.pl': '.ArticleTitle, .articleTeaser, .articleContent',
+        'jelonka.com': '.news-detail__lead, #news-article-body',
+        'swidnica24.pl': '.td-post-content',
+    }
+    selector = selectors.get(host)
+    if not selector:
+        return ''
+    chunks = []
+    for root in soup.select(selector):
+        for tag in root.select(
+            'script, style, nav, aside, form, iframe, .jqplayer, .jp-no-solution, '
+            '.comments, .comment, [id*="comment"], [class*="comment"], '
+            '.news-related-materials, .news-public-people, .related-posts, '
+            '[class*="relatedArticle"], [class*="related-"], .td-a-rec, .sharedaddy'
+        ):
+            tag.decompose()
+        chunks.append(root.get_text(separator='\n', strip=True))
+    return _trim_boilerplate('\n'.join(chunks))
+
+
 def _trim_boilerplate(text: str) -> str:
     if not text:
         return ""
@@ -242,6 +268,15 @@ def fetch_article_body(
         resp.raise_for_status()
         page_html = _html_text(resp)
 
+        final_url = resp.url if isinstance(resp.url, str) and resp.url else url
+        host = _norm_host(urlparse(final_url).hostname)
+        text = _publisher_article_body(page_html, host)
+        if len(text) >= 200:
+            if len(text) < 500 and any(signal in text.lower() for signal in paywall_signals):
+                return '', 'insufficient text (paywall/teaser/login; not enough free content for summary)'
+            log.info('Fetched %s chars (publisher body) from %s', len(text), url)
+            return text, None
+
         text = _article_body_from_jsonld(page_html)
         if len(text) >= 200:
             if any(s in text.lower() for s in paywall_signals) and len(text) < 500:
@@ -259,7 +294,7 @@ def fetch_article_body(
         )
 
         text = ""
-        if "wroclaw.pl/" in url:
+        if host == "wroclaw.pl":
             text = _article_body_from_dom_wroclaw(stripped)
         if len(text) < 250:
             text = _article_body_from_dom(stripped)
