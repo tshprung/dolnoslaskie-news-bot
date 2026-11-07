@@ -83,12 +83,14 @@ def test_explicit_warning_periods_override_inconsistent_semantic_verdicts():
     candidates = [
         row('today', 'New warning', 'A fog warning covers Dolnośląskie from November 6 at 18:00 until November 7 at 10:00.'),
         row('repeat', 'Another outlet', 'IMGW issued a fog alert for Lower Silesia from 6 November at 18:00 until 7 November at 10:00.'),
+        row('no-times', 'Short report', 'A fog warning covers Lower Silesia from November 6 until November 7.'),
         history[0],
     ]
     client = client_responses(json.dumps({'decisions': [
         {'index': 0, 'keep': False, 'reason': 'Same topic as yesterday'},
         {'index': 1, 'keep': True, 'reason': 'Different publisher'},
-        {'index': 2, 'keep': True, 'reason': 'Repeated warning'},
+        {'index': 2, 'keep': True, 'reason': 'Shorter version from another outlet'},
+        {'index': 3, 'keep': True, 'reason': 'Repeated warning'},
     ]}))
     assert digest._filter_covered_events(client, candidates, history) == candidates[:1]
 

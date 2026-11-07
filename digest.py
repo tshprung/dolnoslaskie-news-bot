@@ -355,13 +355,15 @@ def _filter_covered_events(client, rows, history):
         log.info('Digest novelty: id=%s keep=%s reason=%s', rows[index][0], item['keep'], str(item['reason'])[:250])
     # Validity periods are concrete facts, not a semantic similarity judgement.
     # Different overnight fog warnings must not be collapsed into one week-long event.
-    covered_windows = {_fog_warning_window(r) for r in history} - {None}
+    covered_windows = [window for r in history if (window := _fog_warning_window(r)) is not None]
     result = []
     for i, row in enumerate(rows):
         window = _fog_warning_window(row)
         if window is not None:
-            keep = window not in covered_windows
-            covered_windows.add(window)
+            keep = not any(window[:2] == previous[:2] and
+                           (not window[2] or not previous[2] or window[2] == previous[2])
+                           for previous in covered_windows)
+            covered_windows.append(window)
             log.info('Digest warning window: id=%s keep=%s period=%s', row[0], keep, window)
         else:
             keep = verdicts[i]
