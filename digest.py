@@ -312,8 +312,9 @@ def _select_rows(client, rows, max_items, history=None):
 
 def _filter_covered_events(client, rows, history):
     """A separate fact-focused check catches cross-outlet repeats missed by ranking."""
-    if not rows or not history:
+    if not rows or (not history and len(rows) < 2):
         return rows
+    history = history or []
     payload = {
         'previous': [{'index': i, 'title': r[1], 'facts': r[2], 'date': r[5]}
                      for i, r in enumerate(history)],
@@ -332,6 +333,10 @@ def _filter_covered_events(client, rows, history):
              'train on the same date, more background, publicity or another politician reaction is NOT new. '
              'A reopening after repairs, a changed decision, new eligibility/deadline, or a weather warning '
              'for a DIFFERENT validity period IS a useful update. Publication date alone is not a development. '
+             'Also compare candidates WITH EACH OTHER. Select only ONE report per underlying event, '
+             'even if multiple publishers cover it and it is new relative to history. Two fog warnings '
+             'covering the same region and validity period are ONE event. Keep the strongest practical '
+             'report, using earlier candidate order to break ties; never reject both merely because they overlap. '
              'A reason must identify the changed fact or the previously covered event.'},
             {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)},
         ])

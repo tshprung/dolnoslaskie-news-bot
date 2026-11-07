@@ -68,6 +68,16 @@ def test_novelty_discards_bypass_repeat_but_keeps_reopening_and_new_warning_peri
     assert digest._filter_covered_events(client, candidates, history) == candidates[1:]
 
 
+def test_same_brief_event_check_runs_even_without_previous_coverage():
+    candidates = [row('radio', 'Ostrzeżenie IMGW', 'Fog in Lower Silesia from November 6 to November 7.'),
+                  row('legnica', 'Gęste mgły', 'IMGW warns of fog in Lower Silesia from November 6 to November 7.')]
+    client = client_responses(json.dumps({'decisions': [
+        {'index': 0, 'keep': True, 'reason': 'New warning period, strongest practical report'},
+        {'index': 1, 'keep': False, 'reason': 'Same region and validity period as candidate 0'},
+    ]}))
+    assert digest._filter_covered_events(client, candidates, []) == candidates[:1]
+
+
 @pytest.mark.parametrize('response', ['bad JSON', '{"decisions":[]}',
     '{"decisions":[{"index":0,"keep":"false","reason":"repeat"}]}'])
 def test_failed_novelty_audit_does_not_consume_queue_or_send(response, monkeypatch):
