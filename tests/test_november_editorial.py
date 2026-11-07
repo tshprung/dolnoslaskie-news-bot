@@ -147,3 +147,17 @@ def test_shortening_remains_bounded_when_model_ignores_limit(monkeypatch):
     result, reason = summarize_in_english(client, MagicMock(), (1, 2), article)
     assert result is None and reason.startswith('summary too long after shortening')
     assert client.chat.completions.create.call_count == 3
+
+
+@pytest.mark.parametrize('repair,accepted', [
+    ('Piechowice council has started the procedure for a proposed school merger from September 2027.', True),
+    ('Piechowice council approved the school merger, effective September 2027.', False),
+])
+def test_intent_resolution_cannot_become_final_approval(monkeypatch, repair, accepted):
+    source = 'Rada przyjęła uchwały intencyjne dotyczące połączenia szkół. Uchwały rozpoczynają procedurę zmian.'
+    monkeypatch.setattr('summarize.fetch_article_body', lambda *_a: (source, None))
+    client = client_responses('GO', 'Piechowice council approved the school merger, effective September 2027.', repair)
+    article = {'title': 'Piechowice schools', 'summary': '', 'link': 'https://example.com/schools'}
+    result, reason = summarize_in_english(client, MagicMock(), (1, 2), article)
+    assert (result == repair and reason is None) if accepted else (result is None and 'status not preserved' in reason)
+    assert client.chat.completions.create.call_count == 3

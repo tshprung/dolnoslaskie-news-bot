@@ -254,6 +254,13 @@ def _rss_excerpt_substantial(article: dict) -> bool:
     return len(summary) >= 120 and len(title) + len(summary) >= 220
 
 
+def _intent_status_missing(source: str, summary: str) -> bool:
+    """Intent resolutions start a process; never silently turn them into final approval."""
+    has_intent = bool(re.search(r'uchwa\w*\s+intencyjn\w*', source, re.I))
+    preserves_stage = bool(re.search(r'\bintent(?:ion)?s?\b|\bpropos\w*|\bprocedur\w*|\bprocess\b', summary, re.I))
+    return has_intent and not preserves_stage
+
+
 def summarize_in_english(
     client: OpenAI,
     session: requests.Session,
@@ -445,14 +452,17 @@ def summarize_in_english(
         result = fixed
 
     word_count = len(result.split())
-    if word_count > MAX_SUMMARY_WORDS_HARD:
-        log.info('Summary has %s words; attempting one shortening pass', word_count)
+    status_missing = _intent_status_missing(text, result)
+    if word_count > MAX_SUMMARY_WORDS_HARD or status_missing:
+        log.info('Summary repair: words=%s intent_status_missing=%s', word_count, status_missing)
         _TEL.stage2_retries += 1
         response = call_stage2(
             date_context + f'Article: {text[:stage2_limit]}\n\n'
             f'Draft summary: {result}\n\n'
             f'Shorten the draft to at most {MAX_SUMMARY_WORDS} words in factual English. '
             'Preserve proposal/approval status, practical dates, locations and units. '
+            'If the source says uchwały intencyjne, explicitly say this starts a PROCEDURE '
+            'for a PROPOSED change; describe implementation dates as planned, not final approval. '
             'Use only facts supported by the source. Return only the summary, no labels.'
         )
         choice = response.choices[0]
@@ -465,6 +475,8 @@ def summarize_in_english(
         word_count = len(result.split())
         if word_count > MAX_SUMMARY_WORDS_HARD:
             return None, f"summary too long after shortening ({word_count} words, max {MAX_SUMMARY_WORDS})"
+        if _intent_status_missing(text, result):
+            return None, 'intent resolution status not preserved after repair'
 
     return result, None
 
