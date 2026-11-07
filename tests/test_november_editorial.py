@@ -27,6 +27,10 @@ def client_responses(*values):
     return client
 
 
+def audit_reply(decisions):
+    return json.dumps({str(d['index']): {'keep': d['keep'], 'reason': d['reason']} for d in decisions})
+
+
 def test_renamed_portal_article_is_blocked_across_days_and_within_brief():
     first = row('a', 'Koniec połączenia', 'The IC Śnieżka service ends on December 13.',
                 'https://www.portalsamorzadowy.pl/dolnoslaskie/old-headline,682515.html')
@@ -60,21 +64,21 @@ def test_novelty_discards_bypass_repeat_but_keeps_reopening_and_new_warning_peri
         row('aow', 'AOW reopened', 'The AOW lane has reopened after expansion-joint repairs.'),
         row('fog', 'Fog warning', 'A new fog warning applies from November 6 to November 7.'),
     ]
-    client = client_responses(json.dumps({'decisions': [
+    client = client_responses(audit_reply([
         {'index': 0, 'keep': False, 'reason': 'Same bypass opening already covered'},
         {'index': 1, 'keep': True, 'reason': 'Lane reopened after the earlier restriction'},
         {'index': 2, 'keep': True, 'reason': 'Different warning validity period'},
-    ]}))
+    ]))
     assert digest._filter_covered_events(client, candidates, history) == candidates[1:]
 
 
 def test_same_brief_event_check_runs_even_without_previous_coverage():
     candidates = [row('radio', 'Ostrzeżenie IMGW', 'Fog in Lower Silesia from November 6 to November 7.'),
                   row('legnica', 'Gęste mgły', 'IMGW warns of fog in Lower Silesia from November 6 to November 7.')]
-    client = client_responses(json.dumps({'decisions': [
+    client = client_responses(audit_reply([
         {'index': 0, 'keep': True, 'reason': 'New warning period, strongest practical report'},
         {'index': 1, 'keep': False, 'reason': 'Same region and validity period as candidate 0'},
-    ]}))
+    ]))
     assert digest._filter_covered_events(client, candidates, []) == candidates[:1]
 
 
@@ -86,17 +90,17 @@ def test_explicit_warning_periods_override_inconsistent_semantic_verdicts():
         row('no-times', 'Short report', 'A fog warning covers Lower Silesia from November 6 until November 7.'),
         history[0],
     ]
-    client = client_responses(json.dumps({'decisions': [
+    client = client_responses(audit_reply([
         {'index': 0, 'keep': False, 'reason': 'Same topic as yesterday'},
         {'index': 1, 'keep': True, 'reason': 'Different publisher'},
         {'index': 2, 'keep': True, 'reason': 'Shorter version from another outlet'},
         {'index': 3, 'keep': True, 'reason': 'Repeated warning'},
-    ]}))
+    ]))
     assert digest._filter_covered_events(client, candidates, history) == candidates[:1]
 
 
-@pytest.mark.parametrize('response', ['bad JSON', '{"decisions":[]}',
-    '{"decisions":[{"index":0,"keep":"false","reason":"repeat"}]}'])
+@pytest.mark.parametrize('response', ['bad JSON', '{}',
+    '{"0":{"keep":"false","reason":"repeat"}}'])
 def test_failed_novelty_audit_does_not_consume_queue_or_send(response, monkeypatch):
     conn = sqlite3.connect(':memory:')
     conn.execute('CREATE TABLE bot_kv(k TEXT PRIMARY KEY,v TEXT)')
