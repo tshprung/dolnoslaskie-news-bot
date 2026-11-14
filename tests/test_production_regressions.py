@@ -53,6 +53,13 @@ def incident_row():
             'https://example.com/a','Source','27.10.2026 10:00',int(datetime.now(timezone.utc).timestamp()))
 
 
+def test_collision_verb_and_polish_title_trigger_live_check():
+    row = list(incident_row())
+    row[1] = 'Duże utrudnienia na AOW. Dwa zderzenia'
+    row[2] = 'A car and a truck collided near the Wrocław Stadion junction. Expect traffic delays up to three hours.'
+    assert freshness.is_live_incident(row)
+
+
 @pytest.fixture
 def conn():
     db=sqlite3.connect(':memory:')
