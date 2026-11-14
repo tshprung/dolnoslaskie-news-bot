@@ -91,6 +91,32 @@ def test_empty_editor_selection_is_valid_and_does_not_force_stories(conn, monkey
     assert conn.execute("SELECT count(*) FROM bot_kv").fetchone()[0] == 0
 
 
+def test_renamed_published_article_stays_excluded_after_history_expires(conn, monkeypatch):
+    article = {
+        "id": "nov6", "title": "Koniec pociągów", "source": "PortalSamorządowy",
+        "link": "https://www.portalsamorzadowy.pl/old-slug,682515.html",
+        "date": "06.11.2026 10:40", "sort_key": datetime.now(timezone.utc) - timedelta(days=31),
+    }
+    digest.store_digest_article(conn, article, "The direct IC Śnieżka service is ending.")
+    conn.execute("UPDATE digest_articles SET status='published', digested_at=datetime('now','-31 days')")
+    digest.store_digest_article(conn, {
+        **article, "id": "nov14", "title": "Uzdrowiska bez połączeń",
+        "link": "https://portalsamorzadowy.pl/new-slug,682515.html",
+        "sort_key": datetime.now(timezone.utc),
+    }, "PKP Intercity plans to terminate the Śnieżka service.")
+    client = MagicMock()
+    post = MagicMock()
+    monkeypatch.setattr(digest, "send_to_telegram", post)
+    assert digest._recent_digest_history(conn) == []
+    send(conn, dry_run=True, client=client)
+    assert states(conn) == {"nov6": "published", "nov14": "pending"}
+    send(conn, client=client)
+    assert states(conn) == {"nov6": "published", "nov14": "excluded"}
+    assert conn.execute("SELECT status_reason FROM digest_articles WHERE id='nov14'").fetchone()[0] == "publisher article already published"
+    client.chat.completions.create.assert_not_called()
+    post.assert_not_called()
+
+
 def test_empty_queue_can_receive_a_digest_later_the_same_day(conn, monkeypatch):
     send(conn)
     rows = queue(conn)

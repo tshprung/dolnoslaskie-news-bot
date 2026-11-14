@@ -15,7 +15,7 @@ log=logging.getLogger(__name__)
 
 def is_live_incident(row):
     text=fold_pl(f'{row[1]} {row[2]}')
-    event=re.search(r'awari|wypad|koliz|karambol|kraks|pekl|pekn|collision|accident|outage|pipe burst|sewage failure|truck.*block',text)
+    event=re.search(r'awari|wypad|koliz|karambol|kraks|zderz|pekl|pekn|collis|collid|accident|outage|pipe burst|sewage failure|truck.*block',text)
     service=re.search(r'traffic|road|motorway|lane|tram|bus|water|power|wod|kanaliz|prad|ruch|jezdni|autostrad|pas\b',text)
     return bool(event and service)
 
@@ -74,6 +74,7 @@ def refresh_incidents(conn,client,session,timeout,rows,dry_run=False):
                     '{"status":"active|resolved|unknown","summary":"English summary, at most 50 words"}. '
                     'Use active only with clear evidence the disruption remains ongoing now or has lasting consequences. '
                     'An old report saying an incident will last an hour or until 20:00 is not current evidence. '
+                    'Never repeat a forecast as current advice once its stated time window has elapsed. '
                     'Resolve relative dates against publication time, not delivery time. '
                     'Updates override earlier paragraphs. Resolved routine traffic incidents are not useful evening news. '
                     'Do not invent reopening, closure, advice or facts. If status is unclear use unknown. '

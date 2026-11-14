@@ -16,8 +16,8 @@ TZ = ZoneInfo("Europe/Warsaw")
 
 TELEGRAM_SAFE_LIMIT = 3900
 MAX_HEADLINE_CHARS = 110
-DIGEST_HISTORY_DAYS = 7
-DIGEST_HISTORY_MAX_ROWS = 80
+DIGEST_HISTORY_DAYS = 21
+DIGEST_HISTORY_MAX_ROWS = 120
 DIGEST_PENDING_MAX_AGE_HOURS = 48
 
 
@@ -193,6 +193,26 @@ def _remove_recent_duplicates(rows, history):
     return result
 
 
+def _remove_published_articles(conn, rows):
+    """Exact publisher identities never expire with the semantic history window."""
+    if not rows:
+        return rows
+    wanted = {story_identity(row[3]) for row in rows if row[3]}
+    seen = set()
+    for (url,) in conn.execute(
+        "SELECT url FROM digest_articles WHERE status='published' AND digested_at IS NOT NULL"
+    ):
+        if url and (key := story_identity(url)) in wanted:
+            seen.add(key)
+    result = []
+    for row in rows:
+        if row[3] and story_identity(row[3]) in seen:
+            log.info("Digest previously published article removed: id=%s", row[0])
+        else:
+            result.append(row)
+    return result
+
+
 def _deduplicate_rows(rows):
     """Remove obvious duplicate events while preserving ranking order."""
     result = []
@@ -226,7 +246,7 @@ def _select_rows(client, rows, max_items, history=None):
         )
 
     history_lines = []
-    for _, row in enumerate(history or [], 1):
+    for row in (history or [])[:40]:
         _, title, summary, _, source, date, _ = row
         history_lines.append(f"- {title} | {source} | {date}\n  Covered facts: {summary}")
     history_block = "\n".join(history_lines) if history_lines else "(none)"
@@ -249,6 +269,17 @@ def _select_rows(client, rows, max_items, history=None):
         "anniversary recaps, generic policy aspirations and routine construction photos. "
         "Do not favor Wrocław or a publisher merely because it is familiar. "
         "Do not impose town quotas or fill space with weak stories.\n\n"
+        "Make the brief varied and worth reading. For every story ask what changed and why "
+        "someone outside the immediate neighborhood would care, or what affected readers can do. "
+        "Favor major local decisions, accountability, science, distinctive regional culture or events "
+        "with a clear reason to attend, and useful changes to services, costs or eligibility. "
+        "A resident consultation with a real opportunity to shape a decision can beat another roadworks update. "
+        "Routine roundabout or paving milestones, equipment counts, grant announcements for already completed "
+        "work, and app feature publicity are weak without a meaningful change readers can use. "
+        "Generally choose at most one routine road-project item; do not turn the brief into a traffic bulletin. "
+        "Still include a major transport opening or a verified, unusually severe ongoing disruption if warranted. "
+        "Keep practical health and safety notices when affected people, place and timing are clear. "
+        "A three-story brief with strong news is preferable to five with filler.\n\n"
         "Treat multiple articles about the same underlying event as ONE story. "
         "Prefer the latest verified status or outcome, including a reopening or resolved outage, "
         "over an earlier report of the same incident. "
@@ -534,7 +565,16 @@ def maybe_send_daily_digest(conn, client, session, timeout, chat_id, dry_run, en
                 "WHERE status='pending' AND sort_epoch < ?",
                 (int(now.timestamp()) - DIGEST_PENDING_MAX_AGE_HOURS * 3600,),
             )
-    rows = _pending(conn)
+    pending = _pending(conn)
+    rows = _remove_published_articles(conn, pending)
+    remaining_ids = {row[0] for row in rows}
+    repeats = [row[0] for row in pending if row[0] not in remaining_ids]
+    if repeats and not dry_run:
+        with conn:
+            conn.executemany(
+                "UPDATE digest_articles SET status='excluded', status_reason='publisher article already published' "
+                "WHERE id=? AND status='pending'", [(article_id,) for article_id in repeats],
+            )
     rows = refresh_incidents(conn,client,session,timeout,rows,dry_run=dry_run)
     if not rows:
         # Collection may recover later today; an empty queue is not a sent digest.
