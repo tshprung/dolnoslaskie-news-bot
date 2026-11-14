@@ -279,6 +279,10 @@ def _select_rows(client, rows, max_items, history=None):
         "Generally choose at most one routine road-project item; do not turn the brief into a traffic bulletin. "
         "Still include a major transport opening or a verified, unusually severe ongoing disruption if warranted. "
         "Keep practical health and safety notices when affected people, place and timing are clear. "
+        "Skip isolated crimes, crashes and court disputes unless they reveal systemic problems, "
+        "change policy, or present a current risk to readers. Skip industry networking and civic "
+        "promotion unless there is a specific new consequence. Do not mistake a striking headline "
+        "for a substantial story. "
         "A three-story brief with strong news is preferable to five with filler.\n\n"
         "Treat multiple articles about the same underlying event as ONE story. "
         "Prefer the latest verified status or outcome, including a reopening or resolved outage, "
@@ -301,7 +305,8 @@ def _select_rows(client, rows, max_items, history=None):
 
     try:
         response = complete(client, "digest_selection",
-            model="gpt-4o-mini",
+            model="gpt-4o",
+            temperature=0,
             max_tokens=150,
             response_format={"type": "json_object"},
             messages=[
